@@ -1,0 +1,14 @@
+[package]
+name = "nexlink-node"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+nexlink-lib = { path = "../nexlink-lib" }
+libp2p = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
+clap = { workspace = true }
+libp2p-stream = { workspace = true }

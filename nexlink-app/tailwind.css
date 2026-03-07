@@ -1,0 +1,19 @@
+@import "tailwindcss";
+
+@source "./src/**/*.rs";
+
+@theme {
+    --color-cyber-cyan: #06b6d4;
+    --color-cyber-blue: #3b82f6;
+    --color-cyber-green: #22c55e;
+    --color-cyber-amber: #f59e0b;
+    --color-cyber-red: #ef4444;
+    --color-surface-dark: #0f172a;
+    --color-surface: #1e293b;
+    --color-surface-light: #334155;
+    --color-border: #475569;
+}
+
+html {
+    overflow: hidden;
+}
