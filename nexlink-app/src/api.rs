@@ -1,26 +1,40 @@
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
+use wasm_bindgen::JsCast;
+use wasm_bindgen_futures::JsFuture;
 
 use crate::types::{AppStatus, PeerInfo, ProxyStatus, TrafficStats};
 
 #[wasm_bindgen]
 extern "C" {
     #[wasm_bindgen(catch, js_namespace = ["window", "__TAURI__", "core"])]
-    async fn invoke(cmd: &str, args: JsValue) -> Result<JsValue, JsValue>;
+    fn invoke(cmd: &str, args: JsValue) -> Result<JsValue, JsValue>;
+}
+
+fn to_promise(val: JsValue) -> Result<js_sys::Promise, String> {
+    val.dyn_into::<js_sys::Promise>()
+        .map_err(|_| "invoke did not return a Promise".to_string())
 }
 
 async fn call<T: serde::de::DeserializeOwned>(cmd: &str, args: JsValue) -> Result<T, String> {
-    let result = invoke(cmd, args)
-        .await
+    let raw = invoke(cmd, args)
         .map_err(|e| e.as_string().unwrap_or_else(|| "Unknown error".to_string()))?;
+
+    let result = JsFuture::from(to_promise(raw)?)
+        .await
+        .map_err(|e| e.as_string().unwrap_or_else(|| "Promise rejected".to_string()))?;
+
     serde_wasm_bindgen::from_value(result).map_err(|e| e.to_string())
 }
 
 async fn call_void(cmd: &str, args: JsValue) -> Result<(), String> {
-    invoke(cmd, args)
-        .await
+    let raw = invoke(cmd, args)
         .map_err(|e| e.as_string().unwrap_or_else(|| "Unknown error".to_string()))?;
-    Ok(())
+
+    JsFuture::from(to_promise(raw)?)
+        .await
+        .map_err(|e| e.as_string().unwrap_or_else(|| "Promise rejected".to_string()))
+        .map(|_| ())
 }
 
 fn no_args() -> JsValue {

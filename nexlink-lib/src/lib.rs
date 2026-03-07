@@ -6,3 +6,5 @@ pub mod config;
 pub mod proxy;
 pub mod sys_proxy;
 pub mod traffic;
+pub mod ai_proxy;
+pub mod ai_agent;

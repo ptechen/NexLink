@@ -2,17 +2,26 @@ use crate::api;
 use crate::types::TrafficStats;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 #[component]
 pub fn TrafficPage() -> impl IntoView {
     let (stats, set_stats) = signal(TrafficStats::default());
     let (history, set_history) = signal(Vec::<(u64, u64)>::new());
 
-    // Poll traffic stats every second
+    // Poll traffic stats every second, with cleanup on unmount
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let cancelled_cleanup = cancelled.clone();
+    on_cleanup(move || cancelled_cleanup.store(true, Ordering::Relaxed));
+
     Effect::new(move |_| {
+        let cancelled = cancelled.clone();
         spawn_local(async move {
             loop {
+                if cancelled.load(Ordering::Relaxed) { break; }
                 if let Ok(s) = api::get_traffic().await {
+                    if cancelled.load(Ordering::Relaxed) { break; }
                     set_history.update(|h| {
                         h.push((s.upload_speed, s.download_speed));
                         if h.len() > 60 {

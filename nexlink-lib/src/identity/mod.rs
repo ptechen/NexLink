@@ -4,7 +4,7 @@ use libp2p::PeerId;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 use std::fs;
-use tracing::{info, warn, error};
+use tracing::{info, warn, error, debug};
 
 #[derive(Serialize, Deserialize)]
 struct StoredIdentity {
@@ -35,10 +35,13 @@ impl NodeIdentity {
         // Ed25519 protobuf header should start with expected magic bytes
         if bytes.len() >= 2 {
             // The first byte should be a valid protobuf varint field descriptor
-            // Field number 1 with wire type 2 (length-delimited)
-            if bytes[0] != 0x0a {
-                warn!("Potential keypair corruption detected - unexpected protobuf header");
-                // Don't error immediately, let the decoding handle it
+            // For Ed25519 keys, field number 1 with wire type 2 (length-delimited) gives us 0x0a
+            // For RSA keys or other key types, different values are possible
+            // We should be more permissive about this check to avoid false warnings
+            let expected_headers = [0x0a, 0x12, 0x08, 0x1a]; // Common valid protobuf headers for key types
+            if !expected_headers.contains(&bytes[0]) {
+                // Log at debug level instead of warn to reduce noise
+                debug!("Unexpected protobuf header detected - this may be normal for different key types");
             }
         }
 

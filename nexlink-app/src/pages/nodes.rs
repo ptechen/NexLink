@@ -308,8 +308,11 @@ fn PeerCard(peer: PeerInfo, on_connect: impl Fn(()) + 'static) -> impl IntoView 
 }
 
 fn truncate_peer_id(peer_id: &str) -> String {
-    if peer_id.len() > 16 {
-        format!("{}...{}", &peer_id[..8], &peer_id[peer_id.len() - 6..])
+    let chars: Vec<char> = peer_id.chars().collect();
+    if chars.len() > 16 {
+        let prefix: String = chars[..8].iter().collect();
+        let suffix: String = chars[chars.len() - 6..].iter().collect();
+        format!("{prefix}...{suffix}")
     } else {
         peer_id.to_string()
     }

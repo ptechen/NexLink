@@ -2,16 +2,25 @@ use crate::api;
 use crate::types::AppStatus;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 #[component]
 pub fn StatusBar() -> impl IntoView {
     let (status, set_status) = signal(Option::<AppStatus>::None);
 
-    // Poll status every 2 seconds
+    // Poll status every 2 seconds, with cleanup on unmount
+    let cancelled = Arc::new(AtomicBool::new(false));
+    let cancelled_cleanup = cancelled.clone();
+    on_cleanup(move || cancelled_cleanup.store(true, Ordering::Relaxed));
+
     Effect::new(move |_| {
+        let cancelled = cancelled.clone();
         spawn_local(async move {
             loop {
+                if cancelled.load(Ordering::Relaxed) { break; }
                 if let Ok(s) = api::get_status().await {
+                    if cancelled.load(Ordering::Relaxed) { break; }
                     set_status.set(Some(s));
                 }
                 gloo_timers::future::TimeoutFuture::new(2000).await;
@@ -148,8 +157,10 @@ pub fn StatusBar() -> impl IntoView {
                     status
                         .get()
                         .map(|s| {
-                            if s.peer_id.len() > 12 {
-                                format!("{}...", &s.peer_id[..12])
+                            let chars: Vec<char> = s.peer_id.chars().collect();
+                            if chars.len() > 12 {
+                                let prefix: String = chars[..12].iter().collect();
+                                format!("{prefix}...")
                             } else {
                                 s.peer_id
                             }

@@ -3,6 +3,7 @@ use nexlink_lib::config::default_data_dir;
 use nexlink_lib::identity::NodeIdentity;
 use nexlink_lib::network::behaviour::NexlinkBehaviourEvent;
 use nexlink_lib::network::swarm::build_client_swarm;
+use nexlink_lib::ai_proxy::{AiAgentCoordinator, AiCoordinatorConfig, start_server};
 use clap::Parser;
 use libp2p::futures::StreamExt;
 use libp2p::rendezvous;
@@ -15,7 +16,7 @@ use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
-#[command(name = "nexlink-node", about = "NexLink P2P proxy node")]
+#[command(name = "nexlink-node", about = "NexLink P2P proxy node with AI capabilities")]
 struct Cli {
     /// Relay server multiaddr (e.g. /ip4/127.0.0.1/udp/4001/quic-v1/p2p/<PEER_ID>)
     #[arg(short, long)]
@@ -32,6 +33,14 @@ struct Cli {
     /// Unified proxy port supporting both SOCKS5 and HTTP CONNECT (client mode)
     #[arg(long, default_value_t = 7890)]
     unified_port: u16,
+
+    /// AI proxy server port (if running as AI provider)
+    #[arg(long, default_value_t = 8080)]
+    ai_proxy_port: u16,
+
+    /// Run as AI proxy provider (host AI models accessible through the network)
+    #[arg(long, default_value_t = false)]
+    ai_provider: bool,
 
     /// Data directory (default: ~/.nexlink/node)
     #[arg(short, long)]
@@ -56,7 +65,7 @@ async fn main() -> Result<()> {
     let identity_path = data_dir.join("identity.json");
     let identity = NodeIdentity::load_or_generate_with_recovery(&identity_path)?;
 
-    info!(peer_id = %identity.peer_id(), "Starting nexlink node");
+    info!(peer_id = %identity.peer_id(), "Starting nexlink node with AI capabilities");
 
     let mut swarm = build_client_swarm(&identity).await?;
 
@@ -113,13 +122,36 @@ async fn main() -> Result<()> {
     let mut proxy_started = false;
     let mut discover_interval = time::interval(Duration::from_secs(30));
 
+    // Start AI proxy server if running as AI provider
+    if cli.ai_provider {
+        info!("Starting AI proxy server on port {}", cli.ai_proxy_port);
+
+        let config = AiCoordinatorConfig::default();
+        let ai_coordinator = AiAgentCoordinator::new(config);
+
+        // Initialize with default endpoints
+        if let Err(e) = ai_coordinator.initialize_with_defaults().await {
+            warn!("Failed to initialize AI coordinator with defaults: {}", e);
+        }
+
+        // Spawn the AI server in a background task
+        let ai_port = cli.ai_proxy_port;
+        tokio::spawn(async move {
+            if let Err(e) = start_server(ai_port).await {
+                warn!("AI proxy server error: {}", e);
+            }
+        });
+
+        info!("AI proxy server started on port {}", cli.ai_proxy_port);
+    }
+
     loop {
         tokio::select! {
             event = swarm.select_next_some() => {
                 match event {
                     SwarmEvent::NewListenAddr { address, .. } => {
                         info!(%address, "Listening");
-                        // Add actual listen addresses as external so rendezvous advertises them
+                        // Add actual listen addresses as external so rendezvous adverts them
                         swarm.add_external_address(address);
                     }
                     SwarmEvent::ConnectionEstablished { peer_id, .. } => {
@@ -182,7 +214,7 @@ async fn main() -> Result<()> {
                     )) => {
                         info!(%peer_id, observed_addr = %info.observed_addr, "Identified by peer");
                         if peer_id == relay_peer_id && !registered {
-                            if cli.provider {
+                            if cli.provider || cli.ai_provider {
                                 // Provider: register with rendezvous so clients can discover us
                                 match swarm.behaviour_mut().rendezvous_client.register(
                                     namespace.clone(),

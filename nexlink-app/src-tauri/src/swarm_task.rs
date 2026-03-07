@@ -80,6 +80,8 @@ pub async fn run_swarm_task(
     let mut last_bytes_sent: u64 = 0;
     let mut last_bytes_received: u64 = 0;
     let mut proxy_guard = nexlink_lib::sys_proxy::ProxyGuard::new();
+    // Track a pending ConnectNode dial — only promote to connected_provider on ConnectionEstablished
+    let mut pending_provider: Option<PeerId> = None;
 
     info!(%peer_id, "Swarm task started");
     let _ = app.emit("swarm-ready", peer_id.to_string());
@@ -97,6 +99,29 @@ pub async fn run_swarm_task(
                         // Only track non-relay peers in node selector
                         if Some(remote) != relay_peer_id {
                             node_selector.set_connected(remote, true);
+                        }
+
+                        // Confirm pending provider connection
+                        if pending_provider == Some(remote) {
+                            pending_provider = None;
+                            connected_provider = Some(remote);
+                            node_selector.set_current(Some(remote));
+                            {
+                                let mut state = shared.write().await;
+                                state.connected_peer = Some(remote.to_string());
+                                for peer in state.discovered_peers.iter_mut() {
+                                    peer.connected = peer.peer_id == remote.to_string();
+                                }
+                            }
+                            let _ = app.emit("peer-connected", remote.to_string());
+
+                            // Persist last provider
+                            let data_path = std::path::Path::new(&data_dir_str);
+                            let mut net_cfg = nexlink_lib::network_id::load_network_config(data_path);
+                            net_cfg.last_provider = Some(remote.to_string());
+                            let _ = nexlink_lib::network_id::save_network_config(data_path, &net_cfg);
+
+                            info!(%remote, "Provider connection confirmed");
                         }
 
                         // Client mode: discover providers (don't register — clients shouldn't be discoverable)
@@ -248,8 +273,23 @@ pub async fn run_swarm_task(
                     SwarmEvent::OutgoingConnectionError { peer_id: Some(remote), error, .. } => {
                         let err_str = error.to_string();
                         warn!(%remote, "Connection failed: {error}");
+
+                        // Clear pending provider if this was the dial we initiated
+                        if pending_provider == Some(remote) {
+                            // Only clear if the relay circuit retry won't happen
+                            let will_retry_circuit = if let (Some(_), Some(r_peer)) = (&relay_addr, relay_peer_id) {
+                                remote != r_peer && !err_str.contains("p2p-circuit")
+                            } else {
+                                false
+                            };
+                            if !will_retry_circuit {
+                                pending_provider = None;
+                                warn!(%remote, "Provider dial failed permanently");
+                            }
+                        }
+
                         // Retry via relay circuit, but not if already a circuit failure (avoid loops)
-                        if let (Some(ref r_addr), Some(r_peer)) = (&relay_addr, relay_peer_id) {
+                        if let (Some(r_addr), Some(r_peer)) = (&relay_addr, relay_peer_id) {
                             if remote != r_peer && !err_str.contains("p2p-circuit") {
                                 if let Ok(circuit_addr) = format!(
                                     "{}/p2p-circuit/p2p/{}", r_addr, remote
@@ -306,6 +346,14 @@ pub async fn run_swarm_task(
                 match cmd {
                     AppCommand::StartProxy { unified_port } => {
                         if let Some(provider_peer) = connected_provider {
+                            // Stop any existing proxy before starting a new one
+                            if !proxy_handles.is_empty() {
+                                for h in proxy_handles.drain(..) {
+                                    h.abort();
+                                }
+                                info!("Stopped existing proxy before restart");
+                            }
+
                             let control = stream_control.clone();
                             let tc = traffic_counter.clone();
 
@@ -343,37 +391,32 @@ pub async fn run_swarm_task(
                     }
                     AppCommand::ConnectNode { peer_id: target } => {
                         if let Ok(pid) = target.parse::<PeerId>() {
-                            let _ = swarm.dial(pid);
-                            connected_provider = Some(pid);
-                            node_selector.set_current(Some(pid));
-                            {
-                                let mut state = shared.write().await;
-                                state.connected_peer = Some(target.clone());
-                                for peer in state.discovered_peers.iter_mut() {
-                                    peer.connected = peer.peer_id == target;
-                                }
+                            // Only initiate dial — defer connected state to ConnectionEstablished
+                            if let Err(e) = swarm.dial(pid) {
+                                warn!(%target, "Failed to dial provider: {e}");
+                            } else {
+                                pending_provider = Some(pid);
+                                info!(%target, "Dialing provider (pending confirmation)");
                             }
-                            let _ = app.emit("peer-connected", &target);
-
-                            // Persist last provider
-                            let data_path = std::path::Path::new(&data_dir_str);
-                            let mut net_cfg = nexlink_lib::network_id::load_network_config(data_path);
-                            net_cfg.last_provider = Some(target.clone());
-                            let _ = nexlink_lib::network_id::save_network_config(data_path, &net_cfg);
-
-                            info!(%target, "Connecting to provider");
                         }
                     }
                     AppCommand::DisconnectNode => {
                         if let Some(provider_peer) = connected_provider.take() {
                             let _ = swarm.disconnect_peer_id(provider_peer);
-                            // Also stop proxy
+                            // Clear system proxy BEFORE aborting proxy handles
+                            // to avoid routing all system traffic to a dead port
+                            if proxy_guard.is_active() {
+                                let _ = nexlink_lib::sys_proxy::clear_system_proxy();
+                                proxy_guard.deactivate();
+                                shared.write().await.system_proxy_enabled = false;
+                                let _ = app.emit("system-proxy-changed", false);
+                            }
                             for h in proxy_handles.drain(..) {
                                 h.abort();
                             }
                             let mut state = shared.write().await;
                             state.connected_peer = None;
-                            state.proxy_status = Some(ProxyStatus { running: false, unified_port: 7890 }); // Default unified port
+                            state.proxy_status = Some(ProxyStatus { running: false, unified_port: 7890 });
                         }
                         let _ = app.emit("peer-disconnected", ());
                     }
