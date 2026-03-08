@@ -43,4 +43,6 @@ pub struct AppStatus {
     pub network_name: Option<String>,
     #[serde(default)]
     pub system_proxy_enabled: bool,
+    pub proxy_username: Option<String>,
+    pub proxy_password: Option<String>,
 }

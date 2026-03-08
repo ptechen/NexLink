@@ -239,7 +239,7 @@ pub fn SettingsPage() -> impl IntoView {
 
             // Proxy Port Section
             <div class="bg-surface rounded-xl border border-border p-5">
-                <h2 class="text-lg font-semibold text-slate-200 mb-4">"Proxy Port"</h2>
+                <h2 class="text-lg font-semibold text-slate-200 mb-4">"Proxy"</h2>
                 <div>
                     <label class="block text-sm text-slate-400 mb-1">"Unified Proxy Port"</label>
                     <div class="bg-surface-dark rounded-lg px-3 py-2 text-sm text-slate-300 font-mono">
@@ -252,75 +252,30 @@ pub fn SettingsPage() -> impl IntoView {
                         }}
                     </div>
                 </div>
-            </div>
-
-            // System Proxy Section
-            <div class="bg-surface rounded-xl border border-border p-5">
-                <div class="flex items-center justify-between">
-                    <div>
-                        <h2 class="text-lg font-semibold text-slate-200">"System Proxy"</h2>
-                        <p class="text-sm text-slate-400 mt-0.5">
-                            {move || {
-                                let sys_enabled = status.get().map(|s| s.system_proxy_enabled).unwrap_or(false);
-                                let proxy_running = status.get()
-                                    .and_then(|s| s.proxy_status.map(|p| p.running))
-                                    .unwrap_or(false);
-                                if sys_enabled {
-                                    "System proxy is active".to_string()
-                                } else if !proxy_running {
-                                    "Start proxy first".to_string()
-                                } else {
-                                    "Route system traffic through proxy".to_string()
-                                }
-                            }}
-                        </p>
+                <div class="mt-3">
+                    <label class="block text-sm text-slate-400 mb-1">"Proxy Username"</label>
+                    <div class="bg-surface-dark rounded-lg px-3 py-2 text-sm text-slate-300 font-mono break-all">
+                        {move || {
+                            status
+                                .get()
+                                .and_then(|s| s.proxy_username)
+                                .unwrap_or_else(|| "Not assigned".to_string())
+                        }}
                     </div>
-                    <button
-                        on:click=move |_| {
-                            let current = status.get();
-                            spawn_local(async move {
-                                let sys_enabled = current.as_ref().map(|s| s.system_proxy_enabled).unwrap_or(false);
-                                if sys_enabled {
-                                    let _ = api::clear_system_proxy().await;
-                                } else {
-                                    let _ = api::set_system_proxy().await;
-                                }
-                                if let Ok(new_status) = api::get_status().await {
-                                    set_status.set(Some(new_status));
-                                }
-                            });
-                        }
-                        disabled=move || {
-                            !status.get()
-                                .and_then(|s| s.proxy_status.map(|p| p.running))
-                                .unwrap_or(false)
-                            && !status.get().map(|s| s.system_proxy_enabled).unwrap_or(false)
-                        }
-                        class=move || {
-                            let sys_enabled = status.get().map(|s| s.system_proxy_enabled).unwrap_or(false);
-                            let proxy_running = status.get()
-                                .and_then(|s| s.proxy_status.map(|p| p.running))
-                                .unwrap_or(false);
-                            if sys_enabled {
-                                "relative inline-flex h-7 w-12 items-center rounded-full bg-cyber-green transition-colors cursor-pointer"
-                            } else if proxy_running {
-                                "relative inline-flex h-7 w-12 items-center rounded-full bg-slate-600 transition-colors cursor-pointer"
-                            } else {
-                                "relative inline-flex h-7 w-12 items-center rounded-full bg-slate-700 transition-colors cursor-not-allowed opacity-50"
-                            }
-                        }
-                    >
-                        <span class=move || {
-                            let sys_enabled = status.get().map(|s| s.system_proxy_enabled).unwrap_or(false);
-                            if sys_enabled {
-                                "inline-block h-5 w-5 transform rounded-full bg-white transition-transform translate-x-6"
-                            } else {
-                                "inline-block h-5 w-5 transform rounded-full bg-white transition-transform translate-x-1"
-                            }
-                        }></span>
-                    </button>
+                </div>
+                <div class="mt-3">
+                    <label class="block text-sm text-slate-400 mb-1">"Proxy Password"</label>
+                    <div class="bg-surface-dark rounded-lg px-3 py-2 text-sm text-slate-300 font-mono break-all">
+                        {move || {
+                            status
+                                .get()
+                                .and_then(|s| s.proxy_password)
+                                .unwrap_or_else(|| "Not assigned".to_string())
+                        }}
+                    </div>
                 </div>
             </div>
+
 
             // Data Directory
             <div class="bg-surface rounded-xl border border-border p-5">
@@ -332,7 +287,7 @@ pub fn SettingsPage() -> impl IntoView {
                             status
                                 .get()
                                 .map(|s| s.data_dir)
-                                .unwrap_or_else(|| "~/.clash/".to_string())
+                                .unwrap_or_else(|| "~/.nexlink/".to_string())
                         }}
                     </div>
                 </div>

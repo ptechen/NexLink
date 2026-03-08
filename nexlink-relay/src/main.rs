@@ -5,12 +5,13 @@ use nexlink_lib::config::default_data_dir;
 use nexlink_lib::identity::NodeIdentity;
 use nexlink_lib::network::behaviour::RelayBehaviourEvent;
 use nexlink_lib::network::swarm::build_relay_swarm;
+use nexlink_lib::proxy::{credentials::derive_credentials, CREDENTIALS_PROTOCOL};
 use clap::Parser;
-use libp2p::futures::StreamExt;
+use libp2p::futures::{AsyncWriteExt, StreamExt};
 use libp2p::swarm::SwarmEvent;
 use libp2p::Multiaddr;
 use tokio::signal;
-use tracing::info;
+use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
@@ -31,6 +32,10 @@ struct Cli {
     /// Max circuit duration in seconds
     #[arg(long, default_value_t = 300)]
     max_circuit_duration_secs: u64,
+
+    /// Secret for deriving proxy credentials (hex string)
+    #[arg(long, default_value = "nexlink-default-secret")]
+    credentials_secret: String,
 }
 
 #[tokio::main]
@@ -57,6 +62,34 @@ async fn main() -> Result<()> {
     };
 
     let mut swarm = build_relay_swarm(&identity, relay_config).await?;
+
+    // Spawn credentials handler
+    let secret = cli.credentials_secret.as_bytes().to_vec();
+    let mut credentials_control = swarm.behaviour().stream.new_control();
+    let mut incoming = credentials_control
+        .accept(CREDENTIALS_PROTOCOL)
+        .expect("credentials protocol not yet registered");
+
+    tokio::spawn(async move {
+        while let Some((peer_id, mut stream)) = incoming.next().await {
+            let creds = derive_credentials(&peer_id, &secret);
+            let json = match serde_json::to_vec(&creds) {
+                Ok(j) => j,
+                Err(e) => {
+                    warn!(%peer_id, "Failed to serialize credentials: {e}");
+                    continue;
+                }
+            };
+            if let Err(e) = stream.write_all(&json).await {
+                warn!(%peer_id, "Failed to write credentials: {e}");
+                continue;
+            }
+            if let Err(e) = stream.close().await {
+                warn!(%peer_id, "Failed to close credentials stream: {e}");
+            }
+            info!(%peer_id, username = %creds.username, "Issued proxy credentials");
+        }
+    });
 
     let listen_addr: Multiaddr = cli.listen.parse()?;
     swarm.listen_on(listen_addr)?;
@@ -91,6 +124,7 @@ async fn main() -> Result<()> {
                             RelayBehaviourEvent::Ping(e) => {
                                 info!("Ping: {e:?}");
                             }
+                            RelayBehaviourEvent::Stream(_) => {}
                         }
                     }
                     _ => {}

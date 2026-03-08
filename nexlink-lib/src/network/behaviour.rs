@@ -20,5 +20,6 @@ pub struct RelayBehaviour {
     pub identify: identify::Behaviour,
     pub rendezvous_server: rendezvous::server::Behaviour,
     pub ping: ping::Behaviour,
+    pub stream: stream::Behaviour,
     pub autonat: autonat::Behaviour,
 }

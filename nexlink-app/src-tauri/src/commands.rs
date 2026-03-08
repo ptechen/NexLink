@@ -1,5 +1,6 @@
 use crate::state::{AppCommand, AppState, PeerInfo, ProxyStatus, SharedState, TrafficStats};
 use tauri::State;
+use tokio::sync::oneshot;
 
 #[tauri::command]
 pub async fn get_identity(state: State<'_, AppState>) -> Result<String, String> {
@@ -47,22 +48,29 @@ pub async fn start_proxy(
     state: State<'_, AppState>,
     unified_port: u16,
 ) -> Result<(), String> {
+    let (tx, rx) = oneshot::channel();
     state
         .cmd_tx
         .send(AppCommand::StartProxy {
             unified_port,
+            done: tx,
         })
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    let _ = rx.await;
+    Ok(())
 }
 
 #[tauri::command]
 pub async fn stop_proxy(state: State<'_, AppState>) -> Result<(), String> {
+    let (tx, rx) = oneshot::channel();
     state
         .cmd_tx
-        .send(AppCommand::StopProxy)
+        .send(AppCommand::StopProxy { done: tx })
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    let _ = rx.await;
+    Ok(())
 }
 
 #[tauri::command]
@@ -119,18 +127,24 @@ pub async fn leave_network(state: State<'_, AppState>) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn set_system_proxy(state: State<'_, AppState>) -> Result<(), String> {
+    let (tx, rx) = oneshot::channel();
     state
         .cmd_tx
-        .send(AppCommand::SetSystemProxy)
+        .send(AppCommand::SetSystemProxy { done: tx })
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    let _ = rx.await;
+    Ok(())
 }
 
 #[tauri::command]
 pub async fn clear_system_proxy(state: State<'_, AppState>) -> Result<(), String> {
+    let (tx, rx) = oneshot::channel();
     state
         .cmd_tx
-        .send(AppCommand::ClearSystemProxy)
+        .send(AppCommand::ClearSystemProxy { done: tx })
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    let _ = rx.await;
+    Ok(())
 }

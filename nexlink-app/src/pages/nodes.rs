@@ -26,17 +26,21 @@ pub fn NodesPage() -> impl IntoView {
     });
 
     let toggle_proxy = move |_| {
-        let current = status.get();
         spawn_local(async move {
-            if let Some(ref s) = current {
-                if s.proxy_status.as_ref().map(|p| p.running).unwrap_or(false) {
-                    let _ = api::stop_proxy().await;
-                } else {
-                    let _ = api::start_proxy(7890).await;
+            let running = api::get_status()
+                .await
+                .ok()
+                .and_then(|s| s.proxy_status.map(|p| p.running))
+                .unwrap_or(false);
+            if running {
+                let _ = api::stop_proxy().await;
+            } else {
+                if api::start_proxy(7890).await.is_ok() {
+                    let _ = api::set_system_proxy().await;
                 }
-                if let Ok(new_status) = api::get_status().await {
-                    set_status.set(Some(new_status));
-                }
+            }
+            if let Ok(new_status) = api::get_status().await {
+                set_status.set(Some(new_status));
             }
         });
     };
@@ -84,23 +88,14 @@ pub fn NodesPage() -> impl IntoView {
                         <h2 class="text-lg font-semibold text-slate-200">"Proxy"</h2>
                         <p class="text-sm text-slate-400 mt-0.5">
                             {move || {
-                                status
+                                let running = status
                                     .get()
-                                    .and_then(|s| {
-                                        s.proxy_status
-                                            .as_ref()
-                                            .map(|p| {
-                                                if p.running {
-                                                    format!(
-                                                        "UNIFIED :{}",
-                                                        p.unified_port,
-                                                    )
-                                                } else {
-                                                    "Stopped".to_string()
-                                                }
-                                            })
-                                    })
-                                    .unwrap_or_else(|| "Not initialized".to_string())
+                                    .and_then(|s| s.proxy_status.as_ref().map(|p| (p.running, p.unified_port)));
+                                match running {
+                                    Some((true, port)) => format!("UNIFIED :{port} | System Proxy Active"),
+                                    Some((false, _)) => "Stopped".to_string(),
+                                    None => "Not initialized".to_string(),
+                                }
                             }}
                         </p>
                     </div>

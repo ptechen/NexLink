@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{mpsc, oneshot, RwLock};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -44,14 +44,19 @@ pub struct SharedState {
     pub network_mode: String,
     pub network_name: Option<String>,
     pub system_proxy_enabled: bool,
+    pub proxy_username: Option<String>,
+    pub proxy_password: Option<String>,
 }
 
 #[derive(Debug)]
 pub enum AppCommand {
     StartProxy {
         unified_port: u16,
+        done: oneshot::Sender<()>,
     },
-    StopProxy,
+    StopProxy {
+        done: oneshot::Sender<()>,
+    },
     ConnectNode {
         peer_id: String,
     },
@@ -66,8 +71,12 @@ pub enum AppCommand {
         password: String,
     },
     LeaveNetwork,
-    SetSystemProxy,
-    ClearSystemProxy,
+    SetSystemProxy {
+        done: oneshot::Sender<()>,
+    },
+    ClearSystemProxy {
+        done: oneshot::Sender<()>,
+    },
 }
 
 pub struct AppState {

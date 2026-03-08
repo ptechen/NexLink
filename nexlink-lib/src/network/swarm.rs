@@ -75,6 +75,7 @@ pub async fn build_relay_swarm(
                     rendezvous::server::Config::default(),
                 ),
                 ping: ping::Behaviour::new(ping::Config::default()),
+                stream: stream::Behaviour::new(),
                 autonat: autonat::Behaviour::new(
                     key.public().to_peer_id(),
                     autonat::Config {

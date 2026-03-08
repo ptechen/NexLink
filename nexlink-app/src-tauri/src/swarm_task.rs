@@ -3,8 +3,8 @@ use anyhow::Result;
 use nexlink_lib::identity::NodeIdentity;
 use nexlink_lib::network::behaviour::NexlinkBehaviourEvent;
 use nexlink_lib::network::swarm::build_client_swarm;
-use nexlink_lib::proxy;
-use libp2p::futures::StreamExt;
+use nexlink_lib::proxy::{self, ProxyCredentials, CREDENTIALS_PROTOCOL};
+use libp2p::futures::{AsyncReadExt, StreamExt};
 use libp2p::swarm::SwarmEvent;
 use libp2p::{autonat, identify, relay, rendezvous, Multiaddr, PeerId};
 use std::sync::Arc;
@@ -12,6 +12,23 @@ use tauri::{AppHandle, Emitter};
 use tokio::sync::{mpsc, RwLock};
 use tokio::time::{interval, Duration};
 use tracing::{debug, info, warn};
+
+/// Request proxy credentials from relay via the credentials stream protocol
+async fn request_credentials(
+    control: &mut libp2p_stream::Control,
+    relay_peer_id: PeerId,
+) -> Result<ProxyCredentials> {
+    let mut stream = control
+        .open_stream(relay_peer_id, CREDENTIALS_PROTOCOL)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to open credentials stream: {e}"))?;
+
+    let mut buf = Vec::new();
+    stream.read_to_end(&mut buf).await?;
+
+    let creds: ProxyCredentials = serde_json::from_slice(&buf)?;
+    Ok(creds)
+}
 
 pub async fn run_swarm_task(
     app: AppHandle,
@@ -80,6 +97,8 @@ pub async fn run_swarm_task(
     let mut last_bytes_sent: u64 = 0;
     let mut last_bytes_received: u64 = 0;
     let mut proxy_guard = nexlink_lib::sys_proxy::ProxyGuard::new();
+    let mut proxy_credentials: Option<ProxyCredentials> = None;
+    let mut credentials_requested = false;
 
     info!(%peer_id, "Swarm task started");
     let _ = app.emit("swarm-ready", peer_id.to_string());
@@ -97,6 +116,26 @@ pub async fn run_swarm_task(
                         // Only track non-relay peers in node selector
                         if Some(remote) != relay_peer_id {
                             node_selector.set_connected(remote, true);
+                        }
+
+                        // Request credentials from relay on first connection
+                        if Some(remote) == relay_peer_id && !credentials_requested {
+                            credentials_requested = true;
+                            let mut ctl = stream_control.clone();
+                            match request_credentials(&mut ctl, remote).await {
+                                Ok(creds) => {
+                                    info!(username = %creds.username, "Received proxy credentials from relay");
+                                    {
+                                        let mut state = shared.write().await;
+                                        state.proxy_username = Some(creds.username.clone());
+                                        state.proxy_password = Some(creds.password.clone());
+                                    }
+                                    proxy_credentials = Some(creds);
+                                }
+                                Err(e) => {
+                                    warn!("Failed to request credentials from relay: {e}");
+                                }
+                            }
                         }
 
                         // Client mode: discover providers (don't register — clients shouldn't be discoverable)
@@ -304,14 +343,15 @@ pub async fn run_swarm_task(
 
             Some(cmd) = cmd_rx.recv() => {
                 match cmd {
-                    AppCommand::StartProxy { unified_port } => {
+                    AppCommand::StartProxy { unified_port, done } => {
                         if let Some(provider_peer) = connected_provider {
                             let control = stream_control.clone();
                             let tc = traffic_counter.clone();
+                            let creds = proxy_credentials.clone();
 
                             // Start unified proxy that handles both SOCKS5 and HTTP CONNECT
                             let h = tokio::spawn(async move {
-                                if let Err(e) = proxy::unified_proxy::start_unified_proxy(unified_port, provider_peer, control, tc).await {
+                                if let Err(e) = proxy::unified_proxy::start_unified_proxy(unified_port, provider_peer, control, tc, creds).await {
                                     warn!("Unified proxy error: {e}");
                                 }
                             });
@@ -324,8 +364,9 @@ pub async fn run_swarm_task(
                         } else {
                             warn!("No provider connected, cannot start proxy");
                         }
+                        let _ = done.send(());
                     }
-                    AppCommand::StopProxy => {
+                    AppCommand::StopProxy { done } => {
                         // Auto-clear system proxy if active
                         if proxy_guard.is_active() {
                             let _ = nexlink_lib::sys_proxy::clear_system_proxy();
@@ -340,6 +381,7 @@ pub async fn run_swarm_task(
                         shared.write().await.proxy_status = Some(status.clone());
                         let _ = app.emit("proxy-status", &status);
                         info!("Proxy stopped");
+                        let _ = done.send(());
                     }
                     AppCommand::ConnectNode { peer_id: target } => {
                         if let Ok(pid) = target.parse::<PeerId>() {
@@ -510,7 +552,7 @@ pub async fn run_swarm_task(
                         let _ = app.emit("network-changed", "public");
                         info!("Left private network, back to public");
                     }
-                    AppCommand::SetSystemProxy => {
+                    AppCommand::SetSystemProxy { done } => {
                         let state = shared.read().await;
                         if let Some(ref ps) = state.proxy_status {
                             if ps.running {
@@ -531,8 +573,9 @@ pub async fn run_swarm_task(
                                 warn!("Cannot set system proxy: proxy not running");
                             }
                         }
+                        let _ = done.send(());
                     }
-                    AppCommand::ClearSystemProxy => {
+                    AppCommand::ClearSystemProxy { done } => {
                         if let Err(e) = nexlink_lib::sys_proxy::clear_system_proxy() {
                             warn!("Failed to clear system proxy: {e}");
                         }
@@ -540,6 +583,7 @@ pub async fn run_swarm_task(
                         shared.write().await.system_proxy_enabled = false;
                         let _ = app.emit("system-proxy-changed", false);
                         info!("System proxy disabled");
+                        let _ = done.send(());
                     }
                 }
             }

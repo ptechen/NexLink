@@ -3,8 +3,9 @@ use nexlink_lib::config::default_data_dir;
 use nexlink_lib::identity::NodeIdentity;
 use nexlink_lib::network::behaviour::NexlinkBehaviourEvent;
 use nexlink_lib::network::swarm::build_client_swarm;
+use nexlink_lib::proxy::{ProxyCredentials, CREDENTIALS_PROTOCOL};
 use clap::Parser;
-use libp2p::futures::StreamExt;
+use libp2p::futures::{AsyncReadExt, StreamExt};
 use libp2p::rendezvous;
 use libp2p::swarm::SwarmEvent;
 use libp2p::Multiaddr;
@@ -36,6 +37,23 @@ struct Cli {
     /// Data directory (default: ~/.nexlink/node)
     #[arg(short, long)]
     data_dir: Option<String>,
+}
+
+/// Request proxy credentials from relay via the credentials stream protocol
+async fn request_credentials(
+    control: &mut libp2p_stream::Control,
+    relay_peer_id: libp2p::PeerId,
+) -> Result<ProxyCredentials> {
+    let mut stream = control
+        .open_stream(relay_peer_id, CREDENTIALS_PROTOCOL)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to open credentials stream: {e}"))?;
+
+    let mut buf = Vec::new();
+    stream.read_to_end(&mut buf).await?;
+
+    let creds: ProxyCredentials = serde_json::from_slice(&buf)?;
+    Ok(creds)
 }
 
 #[tokio::main]
@@ -112,6 +130,8 @@ async fn main() -> Result<()> {
     let mut registered = false;
     let mut proxy_started = false;
     let mut discover_interval = time::interval(Duration::from_secs(30));
+    let mut proxy_credentials: Option<ProxyCredentials> = None;
+    let mut credentials_requested = false;
 
     loop {
         tokio::select! {
@@ -119,18 +139,33 @@ async fn main() -> Result<()> {
                 match event {
                     SwarmEvent::NewListenAddr { address, .. } => {
                         info!(%address, "Listening");
-                        // Add actual listen addresses as external so rendezvous advertises them
                         swarm.add_external_address(address);
                     }
                     SwarmEvent::ConnectionEstablished { peer_id, .. } => {
                         info!(%peer_id, "Connected to peer");
+
+                        // Request credentials from relay on first connection
+                        if peer_id == relay_peer_id && !credentials_requested {
+                            credentials_requested = true;
+                            let mut ctl = stream_control.clone();
+                            let relay_pid = relay_peer_id;
+                            let creds_result = request_credentials(&mut ctl, relay_pid).await;
+                            match creds_result {
+                                Ok(creds) => {
+                                    info!(username = %creds.username, "Received proxy credentials from relay");
+                                    proxy_credentials = Some(creds);
+                                }
+                                Err(e) => {
+                                    warn!("Failed to request credentials from relay: {e}");
+                                }
+                            }
+                        }
                     }
                     SwarmEvent::Behaviour(NexlinkBehaviourEvent::RendezvousClient(event)) => {
                         match event {
                             rendezvous::client::Event::Registered { namespace, .. } => {
                                 info!(?namespace, "Registered with rendezvous");
                                 registered = true;
-                                // Discover other peers immediately
                                 swarm.behaviour_mut().rendezvous_client.discover(
                                     Some(namespace),
                                     None,
@@ -155,8 +190,9 @@ async fn main() -> Result<()> {
                                             let unified_ctl = stream_control.clone();
                                             let unified_port = cli.unified_port;
                                             let unified_traffic = nexlink_lib::traffic::TrafficCounter::new();
+                                            let creds = proxy_credentials.clone();
                                             tokio::spawn(async move {
-                                                if let Err(e) = nexlink_lib::proxy::unified_proxy::start_unified_proxy(unified_port, peer, unified_ctl, unified_traffic).await {
+                                                if let Err(e) = nexlink_lib::proxy::unified_proxy::start_unified_proxy(unified_port, peer, unified_ctl, unified_traffic, creds).await {
                                                     warn!("Unified proxy error: {e:#}");
                                                 }
                                             });
@@ -183,7 +219,6 @@ async fn main() -> Result<()> {
                         info!(%peer_id, observed_addr = %info.observed_addr, "Identified by peer");
                         if peer_id == relay_peer_id && !registered {
                             if cli.provider {
-                                // Provider: register with rendezvous so clients can discover us
                                 match swarm.behaviour_mut().rendezvous_client.register(
                                     namespace.clone(),
                                     relay_peer_id,
@@ -193,7 +228,6 @@ async fn main() -> Result<()> {
                                     Err(e) => warn!("Failed to register: {e}"),
                                 }
                             } else {
-                                // Client: skip registration, just discover providers
                                 registered = true;
                                 swarm.behaviour_mut().rendezvous_client.discover(
                                     Some(namespace.clone()),
@@ -249,9 +283,6 @@ async fn main() -> Result<()> {
                         if let Some(peer) = peer_id {
                             let err_str = error.to_string();
                             warn!(%peer, "Outgoing connection failed: {error}");
-                            // Only retry via relay if:
-                            // 1. Not the relay itself
-                            // 2. The error is not already from a relay circuit (avoid loops)
                             if peer != relay_peer_id && !err_str.contains("p2p-circuit") {
                                 let circuit_addr: Multiaddr = format!(
                                     "{relay_addr}/p2p-circuit/p2p/{peer}"

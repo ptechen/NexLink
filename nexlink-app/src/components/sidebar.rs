@@ -16,7 +16,7 @@ pub fn Sidebar() -> impl IntoView {
         <nav class="w-56 bg-surface border-r border-border flex flex-col h-full shrink-0">
             // Logo
             <div class="px-4 py-5 border-b border-border">
-                <h1 class="text-lg font-bold text-cyber-cyan tracking-wider">"CLASH P2P"</h1>
+                <h1 class="text-lg font-bold text-cyber-cyan tracking-wider">"NexLink P2P"</h1>
                 <p class="text-xs text-slate-500 mt-0.5">"Decentralized Proxy"</p>
             </div>
 
