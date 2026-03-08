@@ -252,28 +252,28 @@ pub fn SettingsPage() -> impl IntoView {
                         }}
                     </div>
                 </div>
-                <div class="mt-3">
-                    <label class="block text-sm text-slate-400 mb-1">"Proxy Username"</label>
-                    <div class="bg-surface-dark rounded-lg px-3 py-2 text-sm text-slate-300 font-mono break-all">
-                        {move || {
-                            status
-                                .get()
-                                .and_then(|s| s.proxy_username)
-                                .unwrap_or_else(|| "Not assigned".to_string())
-                        }}
-                    </div>
-                </div>
-                <div class="mt-3">
-                    <label class="block text-sm text-slate-400 mb-1">"Proxy Password"</label>
-                    <div class="bg-surface-dark rounded-lg px-3 py-2 text-sm text-slate-300 font-mono break-all">
-                        {move || {
-                            status
-                                .get()
-                                .and_then(|s| s.proxy_password)
-                                .unwrap_or_else(|| "Not assigned".to_string())
-                        }}
-                    </div>
-                </div>
+                // <div class="mt-3">
+                //     <label class="block text-sm text-slate-400 mb-1">"Proxy Username"</label>
+                //     <div class="bg-surface-dark rounded-lg px-3 py-2 text-sm text-slate-300 font-mono break-all">
+                //         {move || {
+                //             status
+                //                 .get()
+                //                 .and_then(|s| s.proxy_username)
+                //                 .unwrap_or_else(|| "Not assigned".to_string())
+                //         }}
+                //     </div>
+                // </div>
+                // <div class="mt-3">
+                //     <label class="block text-sm text-slate-400 mb-1">"Proxy Password"</label>
+                //     <div class="bg-surface-dark rounded-lg px-3 py-2 text-sm text-slate-300 font-mono break-all">
+                //         {move || {
+                //             status
+                //                 .get()
+                //                 .and_then(|s| s.proxy_password)
+                //                 .unwrap_or_else(|| "Not assigned".to_string())
+                //         }}
+                //     </div>
+                // </div>
             </div>
 
 
