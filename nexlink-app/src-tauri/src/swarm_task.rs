@@ -97,8 +97,8 @@ pub async fn run_swarm_task(
     let mut last_bytes_sent: u64 = 0;
     let mut last_bytes_received: u64 = 0;
     let mut proxy_guard = nexlink_lib::sys_proxy::ProxyGuard::new();
-    let mut proxy_credentials: Option<ProxyCredentials> = None;
     let mut credentials_requested = false;
+    let mut proxy_credentials: Option<ProxyCredentials> = None;
 
     info!(%peer_id, "Swarm task started");
     let _ = app.emit("swarm-ready", peer_id.to_string());
@@ -345,22 +345,25 @@ pub async fn run_swarm_task(
                 match cmd {
                     AppCommand::StartProxy { unified_port, done } => {
                         if let Some(provider_peer) = connected_provider {
-                            let control = stream_control.clone();
-                            let tc = traffic_counter.clone();
-                            let creds = proxy_credentials.clone();
+                            if let Some(creds) = proxy_credentials.clone() {
+                                let control = stream_control.clone();
+                                let tc = traffic_counter.clone();
 
-                            // Start unified proxy that handles both SOCKS5 and HTTP CONNECT
-                            let h = tokio::spawn(async move {
-                                if let Err(e) = proxy::unified_proxy::start_unified_proxy(unified_port, provider_peer, control, tc, creds).await {
-                                    warn!("Unified proxy error: {e}");
-                                }
-                            });
-                            proxy_handles.push(h);
+                                // Start unified proxy that handles both SOCKS5 and HTTP CONNECT
+                                let h = tokio::spawn(async move {
+                                    if let Err(e) = proxy::unified_proxy::start_unified_proxy(unified_port, provider_peer, control, tc, creds).await {
+                                        warn!("Unified proxy error: {e}");
+                                    }
+                                });
+                                proxy_handles.push(h);
 
-                            let status = ProxyStatus { running: true, unified_port };
-                            shared.write().await.proxy_status = Some(status.clone());
-                            let _ = app.emit("proxy-status", &status);
-                            info!(unified_port, %provider_peer, "Unified proxy started");
+                                let status = ProxyStatus { running: true, unified_port };
+                                shared.write().await.proxy_status = Some(status.clone());
+                                let _ = app.emit("proxy-status", &status);
+                                info!(unified_port, %provider_peer, "Unified proxy started");
+                            } else {
+                                warn!("No proxy credentials available, cannot start proxy");
+                            }
                         } else {
                             warn!("No provider connected, cannot start proxy");
                         }

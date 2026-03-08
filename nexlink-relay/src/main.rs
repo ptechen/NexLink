@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Result;
@@ -5,12 +7,13 @@ use nexlink_lib::config::default_data_dir;
 use nexlink_lib::identity::NodeIdentity;
 use nexlink_lib::network::behaviour::RelayBehaviourEvent;
 use nexlink_lib::network::swarm::build_relay_swarm;
-use nexlink_lib::proxy::{credentials::derive_credentials, CREDENTIALS_PROTOCOL};
+use nexlink_lib::proxy::{credentials::derive_credentials, CREDENTIALS_PROTOCOL, CREDENTIALS_SYNC_PROTOCOL};
 use clap::Parser;
 use libp2p::futures::{AsyncWriteExt, StreamExt};
 use libp2p::swarm::SwarmEvent;
-use libp2p::Multiaddr;
+use libp2p::{Multiaddr, PeerId};
 use tokio::signal;
+use tokio::sync::RwLock;
 use tracing::{info, warn};
 use tracing_subscriber::EnvFilter;
 
@@ -63,16 +66,20 @@ async fn main() -> Result<()> {
 
     let mut swarm = build_relay_swarm(&identity, relay_config).await?;
 
-    // Spawn credentials handler
+    // Track connected peers for credentials sync
+    let connected_peers: Arc<RwLock<HashSet<PeerId>>> = Arc::new(RwLock::new(HashSet::new()));
+
+    // Spawn credentials handler (per-peer credential issuance)
     let secret = cli.credentials_secret.as_bytes().to_vec();
     let mut credentials_control = swarm.behaviour().stream.new_control();
     let mut incoming = credentials_control
         .accept(CREDENTIALS_PROTOCOL)
         .expect("credentials protocol not yet registered");
 
+    let secret_for_creds = secret.clone();
     tokio::spawn(async move {
         while let Some((peer_id, mut stream)) = incoming.next().await {
-            let creds = derive_credentials(&peer_id, &secret);
+            let creds = derive_credentials(&peer_id, &secret_for_creds);
             let json = match serde_json::to_vec(&creds) {
                 Ok(j) => j,
                 Err(e) => {
@@ -91,6 +98,41 @@ async fn main() -> Result<()> {
         }
     });
 
+    // Spawn credentials sync handler (returns all connected peers' credentials)
+    let mut sync_control = swarm.behaviour().stream.new_control();
+    let mut sync_incoming = sync_control
+        .accept(CREDENTIALS_SYNC_PROTOCOL)
+        .expect("credentials sync protocol not yet registered");
+
+    let peers_for_sync = connected_peers.clone();
+    let secret_for_sync = secret.clone();
+    tokio::spawn(async move {
+        while let Some((requester, mut stream)) = sync_incoming.next().await {
+            let peers = peers_for_sync.read().await;
+            let all_creds: Vec<nexlink_lib::proxy::ProxyCredentials> = peers
+                .iter()
+                .map(|pid| derive_credentials(pid, &secret_for_sync))
+                .collect();
+            drop(peers);
+
+            let json = match serde_json::to_vec(&all_creds) {
+                Ok(j) => j,
+                Err(e) => {
+                    warn!(%requester, "Failed to serialize credentials sync: {e}");
+                    continue;
+                }
+            };
+            if let Err(e) = stream.write_all(&json).await {
+                warn!(%requester, "Failed to write credentials sync: {e}");
+                continue;
+            }
+            if let Err(e) = stream.close().await {
+                warn!(%requester, "Failed to close credentials sync stream: {e}");
+            }
+            info!(%requester, count = all_creds.len(), "Synced credentials to provider");
+        }
+    });
+
     let listen_addr: Multiaddr = cli.listen.parse()?;
     swarm.listen_on(listen_addr)?;
 
@@ -102,9 +144,11 @@ async fn main() -> Result<()> {
                         info!("Relay listening on {}/p2p/{}", address, swarm.local_peer_id());
                     }
                     SwarmEvent::ConnectionEstablished { peer_id, .. } => {
+                        connected_peers.write().await.insert(peer_id);
                         info!(%peer_id, "Peer connected");
                     }
                     SwarmEvent::ConnectionClosed { peer_id, .. } => {
+                        connected_peers.write().await.remove(&peer_id);
                         info!(%peer_id, "Peer disconnected");
                     }
                     SwarmEvent::Behaviour(event) => {

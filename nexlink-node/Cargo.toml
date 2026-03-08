@@ -13,3 +13,4 @@ anyhow = { workspace = true }
 clap = { workspace = true }
 libp2p-stream = { workspace = true }
 serde_json = { workspace = true }
+dashmap = { workspace = true }

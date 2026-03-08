@@ -1,15 +1,17 @@
 use anyhow::Result;
+use dashmap::DashMap;
 use nexlink_lib::config::default_data_dir;
 use nexlink_lib::identity::NodeIdentity;
 use nexlink_lib::network::behaviour::NexlinkBehaviourEvent;
 use nexlink_lib::network::swarm::build_client_swarm;
-use nexlink_lib::proxy::{ProxyCredentials, CREDENTIALS_PROTOCOL};
+use nexlink_lib::proxy::{ProxyCredentials, CREDENTIALS_PROTOCOL, CREDENTIALS_SYNC_PROTOCOL};
 use clap::Parser;
 use libp2p::futures::{AsyncReadExt, StreamExt};
 use libp2p::rendezvous;
 use libp2p::swarm::SwarmEvent;
 use libp2p::Multiaddr;
 use libp2p::{autonat, relay};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::{signal, time};
 use tracing::{info, warn};
@@ -56,6 +58,23 @@ async fn request_credentials(
     Ok(creds)
 }
 
+/// Request all client credentials from relay via the credentials sync protocol (for provider verification)
+async fn request_credentials_sync(
+    control: &mut libp2p_stream::Control,
+    relay_peer_id: libp2p::PeerId,
+) -> Result<Vec<ProxyCredentials>> {
+    let mut stream = control
+        .open_stream(relay_peer_id, CREDENTIALS_SYNC_PROTOCOL)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to open credentials sync stream: {e}"))?;
+
+    let mut buf = Vec::new();
+    stream.read_to_end(&mut buf).await?;
+
+    let creds: Vec<ProxyCredentials> = serde_json::from_slice(&buf)?;
+    Ok(creds)
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -81,19 +100,22 @@ async fn main() -> Result<()> {
     // Get a stream::Control handle for proxy operations
     let stream_control = swarm.behaviour().stream.new_control();
 
-    // If running as provider, spawn the incoming proxy stream handler
+    // If running as provider, spawn the incoming proxy stream handler with credential verification
+    let allowed_credentials: Arc<DashMap<String, String>> = Arc::new(DashMap::new());
     if cli.provider {
         let mut accept_control = stream_control.clone();
         let mut incoming = accept_control
             .accept(nexlink_lib::proxy::PROXY_PROTOCOL)
             .expect("proxy protocol not yet registered");
 
+        let creds_map = allowed_credentials.clone();
         tokio::spawn(async move {
             use libp2p::futures::StreamExt;
             while let Some((peer_id, stream)) = incoming.next().await {
+                let map = creds_map.clone();
                 tokio::spawn(async move {
                     if let Err(e) =
-                        nexlink_lib::proxy::provider_handler::handle_proxy_stream(peer_id, stream, None).await
+                        nexlink_lib::proxy::provider_handler::handle_proxy_stream(peer_id, stream, None, Some(&map)).await
                     {
                         warn!(%peer_id, "Proxy stream error: {e:#}");
                     }
@@ -130,8 +152,8 @@ async fn main() -> Result<()> {
     let mut registered = false;
     let mut proxy_started = false;
     let mut discover_interval = time::interval(Duration::from_secs(30));
-    let mut proxy_credentials: Option<ProxyCredentials> = None;
     let mut credentials_requested = false;
+    let mut proxy_credentials: Option<ProxyCredentials> = None;
 
     loop {
         tokio::select! {
@@ -147,16 +169,33 @@ async fn main() -> Result<()> {
                         // Request credentials from relay on first connection
                         if peer_id == relay_peer_id && !credentials_requested {
                             credentials_requested = true;
-                            let mut ctl = stream_control.clone();
-                            let relay_pid = relay_peer_id;
-                            let creds_result = request_credentials(&mut ctl, relay_pid).await;
-                            match creds_result {
-                                Ok(creds) => {
-                                    info!(username = %creds.username, "Received proxy credentials from relay");
-                                    proxy_credentials = Some(creds);
+
+                            if cli.provider {
+                                // Provider: sync all client credentials for verification
+                                let mut ctl = stream_control.clone();
+                                match request_credentials_sync(&mut ctl, relay_peer_id).await {
+                                    Ok(creds_list) => {
+                                        allowed_credentials.clear();
+                                        for c in &creds_list {
+                                            allowed_credentials.insert(c.username.clone(), c.password.clone());
+                                        }
+                                        info!(count = creds_list.len(), "Synced client credentials from relay");
+                                    }
+                                    Err(e) => {
+                                        warn!("Failed to sync credentials from relay: {e}");
+                                    }
                                 }
-                                Err(e) => {
-                                    warn!("Failed to request credentials from relay: {e}");
+                            } else {
+                                // Client: request own credentials
+                                let mut ctl = stream_control.clone();
+                                match request_credentials(&mut ctl, relay_peer_id).await {
+                                    Ok(creds) => {
+                                        info!(username = %creds.username, "Received proxy credentials from relay");
+                                        proxy_credentials = Some(creds);
+                                    }
+                                    Err(e) => {
+                                        warn!("Failed to request credentials from relay: {e}");
+                                    }
                                 }
                             }
                         }
@@ -186,17 +225,20 @@ async fn main() -> Result<()> {
 
                                         // In client mode, start local unified proxy pointing to the first discovered provider
                                         if !cli.provider && !proxy_started {
-                                            proxy_started = true;
-                                            let unified_ctl = stream_control.clone();
-                                            let unified_port = cli.unified_port;
-                                            let unified_traffic = nexlink_lib::traffic::TrafficCounter::new();
-                                            let creds = proxy_credentials.clone();
-                                            tokio::spawn(async move {
-                                                if let Err(e) = nexlink_lib::proxy::unified_proxy::start_unified_proxy(unified_port, peer, unified_ctl, unified_traffic, creds).await {
-                                                    warn!("Unified proxy error: {e:#}");
-                                                }
-                                            });
-                                            info!(unified_port, %peer, "Started unified local proxy -> provider");
+                                            if let Some(creds) = proxy_credentials.clone() {
+                                                proxy_started = true;
+                                                let unified_ctl = stream_control.clone();
+                                                let unified_port = cli.unified_port;
+                                                let unified_traffic = nexlink_lib::traffic::TrafficCounter::new();
+                                                tokio::spawn(async move {
+                                                    if let Err(e) = nexlink_lib::proxy::unified_proxy::start_unified_proxy(unified_port, peer, unified_ctl, unified_traffic, creds).await {
+                                                        warn!("Unified proxy error: {e:#}");
+                                                    }
+                                                });
+                                                info!(unified_port, %peer, "Started unified local proxy -> provider");
+                                            } else {
+                                                warn!("No proxy credentials available, cannot start proxy");
+                                            }
                                         }
                                     }
                                 }
@@ -314,6 +356,23 @@ async fn main() -> Result<()> {
                         None,
                         relay_peer_id,
                     );
+
+                    // Provider: refresh credentials from relay on each discover tick
+                    if cli.provider {
+                        let mut ctl = stream_control.clone();
+                        match request_credentials_sync(&mut ctl, relay_peer_id).await {
+                            Ok(creds_list) => {
+                                allowed_credentials.clear();
+                                for c in &creds_list {
+                                    allowed_credentials.insert(c.username.clone(), c.password.clone());
+                                }
+                                info!(count = creds_list.len(), "Refreshed client credentials from relay");
+                            }
+                            Err(e) => {
+                                warn!("Failed to refresh credentials from relay: {e}");
+                            }
+                        }
+                    }
                 }
             }
             _ = signal::ctrl_c() => {

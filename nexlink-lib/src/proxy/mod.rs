@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 pub const PROXY_PROTOCOL: StreamProtocol = StreamProtocol::new("/nexlink/proxy/1.0.0");
 pub const CREDENTIALS_PROTOCOL: StreamProtocol = StreamProtocol::new("/nexlink/credentials/1.0.0");
+pub const CREDENTIALS_SYNC_PROTOCOL: StreamProtocol = StreamProtocol::new("/nexlink/credentials-sync/1.0.0");
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProxyCredentials {
