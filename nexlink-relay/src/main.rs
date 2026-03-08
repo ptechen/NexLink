@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use nexlink_lib::config::default_data_dir;
 use nexlink_lib::identity::NodeIdentity;
 use nexlink_lib::network::behaviour::RelayBehaviourEvent;
@@ -37,8 +37,8 @@ struct Cli {
     max_circuit_duration_secs: u64,
 
     /// Secret for deriving proxy credentials (hex string)
-    #[arg(long, default_value = "nexlink-default-secret")]
-    credentials_secret: String,
+    #[arg(long)]
+    credentials_secret: Option<String>,
 }
 
 #[tokio::main]
@@ -50,6 +50,10 @@ async fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
+    let credentials_secret = cli
+        .credentials_secret
+        .or_else(|| std::env::var("NEXLINK_CREDENTIALS_SECRET").ok())
+        .ok_or_else(|| anyhow!("missing proxy credentials secret; pass --credentials-secret or set NEXLINK_CREDENTIALS_SECRET"))?;
 
     let data_dir = default_data_dir().join("relay");
     let identity_path = data_dir.join("identity.json");
@@ -68,9 +72,10 @@ async fn main() -> Result<()> {
 
     // Track connected peers for credentials sync
     let connected_peers: Arc<RwLock<HashSet<PeerId>>> = Arc::new(RwLock::new(HashSet::new()));
+    let provider_peers: Arc<RwLock<HashSet<PeerId>>> = Arc::new(RwLock::new(HashSet::new()));
 
     // Spawn credentials handler (per-peer credential issuance)
-    let secret = cli.credentials_secret.as_bytes().to_vec();
+    let secret = credentials_secret.into_bytes();
     let mut credentials_control = swarm.behaviour().stream.new_control();
     let mut incoming = credentials_control
         .accept(CREDENTIALS_PROTOCOL)
@@ -105,15 +110,24 @@ async fn main() -> Result<()> {
         .expect("credentials sync protocol not yet registered");
 
     let peers_for_sync = connected_peers.clone();
+    let providers_for_sync = provider_peers.clone();
     let secret_for_sync = secret.clone();
     tokio::spawn(async move {
         while let Some((requester, mut stream)) = sync_incoming.next().await {
+            let providers = providers_for_sync.read().await;
+            if !providers.contains(&requester) {
+                warn!(%requester, "Rejected credentials sync for unregistered provider");
+                let _ = stream.close().await;
+                continue;
+            }
             let peers = peers_for_sync.read().await;
             let all_creds: Vec<nexlink_lib::proxy::ProxyCredentials> = peers
                 .iter()
+                .filter(|pid| !providers.contains(pid))
                 .map(|pid| derive_credentials(pid, &secret_for_sync))
                 .collect();
             drop(peers);
+            drop(providers);
 
             let json = match serde_json::to_vec(&all_creds) {
                 Ok(j) => j,
@@ -149,12 +163,30 @@ async fn main() -> Result<()> {
                     }
                     SwarmEvent::ConnectionClosed { peer_id, .. } => {
                         connected_peers.write().await.remove(&peer_id);
+                        provider_peers.write().await.remove(&peer_id);
                         info!(%peer_id, "Peer disconnected");
                     }
                     SwarmEvent::Behaviour(event) => {
                         match event {
                             RelayBehaviourEvent::RendezvousServer(e) => {
-                                info!("Rendezvous: {e:?}");
+                                match e {
+                                    libp2p::rendezvous::server::Event::PeerRegistered { peer, .. } => {
+                                        provider_peers.write().await.insert(peer);
+                                        info!(%peer, "Provider registered with rendezvous");
+                                    }
+                                    libp2p::rendezvous::server::Event::PeerUnregistered { peer, .. } => {
+                                        provider_peers.write().await.remove(&peer);
+                                        info!(%peer, "Provider unregistered from rendezvous");
+                                    }
+                                    libp2p::rendezvous::server::Event::RegistrationExpired(registration) => {
+                                        let peer = registration.record.peer_id();
+                                        provider_peers.write().await.remove(&peer);
+                                        info!(%peer, "Provider registration expired");
+                                    }
+                                    other => {
+                                        info!("Rendezvous: {other:?}");
+                                    }
+                                }
                             }
                             RelayBehaviourEvent::Relay(e) => {
                                 info!("Relay: {e:?}");

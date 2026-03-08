@@ -75,6 +75,19 @@ async fn request_credentials_sync(
     Ok(creds)
 }
 
+async fn sync_allowed_credentials(
+    allowed_credentials: &Arc<DashMap<String, String>>,
+    control: &mut libp2p_stream::Control,
+    relay_peer_id: libp2p::PeerId,
+) -> Result<usize> {
+    let creds_list = request_credentials_sync(control, relay_peer_id).await?;
+    allowed_credentials.clear();
+    for c in &creds_list {
+        allowed_credentials.insert(c.username.clone(), c.password.clone());
+    }
+    Ok(creds_list.len())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -152,7 +165,6 @@ async fn main() -> Result<()> {
     let mut registered = false;
     let mut proxy_started = false;
     let mut discover_interval = time::interval(Duration::from_secs(30));
-    let mut credentials_requested = false;
     let mut proxy_credentials: Option<ProxyCredentials> = None;
 
     loop {
@@ -166,27 +178,18 @@ async fn main() -> Result<()> {
                     SwarmEvent::ConnectionEstablished { peer_id, .. } => {
                         info!(%peer_id, "Connected to peer");
 
-                        // Request credentials from relay on first connection
-                        if peer_id == relay_peer_id && !credentials_requested {
-                            credentials_requested = true;
-
+                        if peer_id == relay_peer_id {
                             if cli.provider {
-                                // Provider: sync all client credentials for verification
                                 let mut ctl = stream_control.clone();
-                                match request_credentials_sync(&mut ctl, relay_peer_id).await {
-                                    Ok(creds_list) => {
-                                        allowed_credentials.clear();
-                                        for c in &creds_list {
-                                            allowed_credentials.insert(c.username.clone(), c.password.clone());
-                                        }
-                                        info!(count = creds_list.len(), "Synced client credentials from relay");
+                                match sync_allowed_credentials(&allowed_credentials, &mut ctl, relay_peer_id).await {
+                                    Ok(count) => {
+                                        info!(count, "Synced client credentials from relay");
                                     }
                                     Err(e) => {
                                         warn!("Failed to sync credentials from relay: {e}");
                                     }
                                 }
-                            } else {
-                                // Client: request own credentials
+                            } else if proxy_credentials.is_none() {
                                 let mut ctl = stream_control.clone();
                                 match request_credentials(&mut ctl, relay_peer_id).await {
                                     Ok(creds) => {
@@ -360,13 +363,20 @@ async fn main() -> Result<()> {
                     // Provider: refresh credentials from relay on each discover tick
                     if cli.provider {
                         let mut ctl = stream_control.clone();
-                        match request_credentials_sync(&mut ctl, relay_peer_id).await {
-                            Ok(creds_list) => {
-                                allowed_credentials.clear();
-                                for c in &creds_list {
-                                    allowed_credentials.insert(c.username.clone(), c.password.clone());
-                                }
-                                info!(count = creds_list.len(), "Refreshed client credentials from relay");
+                        match sync_allowed_credentials(&allowed_credentials, &mut ctl, relay_peer_id).await {
+                            Ok(count) => {
+                                info!(count, "Refreshed client credentials from relay");
+                            }
+                            Err(e) => {
+                                warn!("Failed to refresh credentials from relay: {e}");
+                            }
+                        }
+                    } else if proxy_credentials.is_none() {
+                        let mut ctl = stream_control.clone();
+                        match request_credentials(&mut ctl, relay_peer_id).await {
+                            Ok(creds) => {
+                                info!(username = %creds.username, "Refreshed proxy credentials from relay");
+                                proxy_credentials = Some(creds);
                             }
                             Err(e) => {
                                 warn!("Failed to refresh credentials from relay: {e}");

@@ -52,10 +52,10 @@ pub struct SharedState {
 pub enum AppCommand {
     StartProxy {
         unified_port: u16,
-        done: oneshot::Sender<()>,
+        done: oneshot::Sender<Result<(), String>>,
     },
     StopProxy {
-        done: oneshot::Sender<()>,
+        done: oneshot::Sender<Result<(), String>>,
     },
     ConnectNode {
         peer_id: String,
@@ -72,10 +72,10 @@ pub enum AppCommand {
     },
     LeaveNetwork,
     SetSystemProxy {
-        done: oneshot::Sender<()>,
+        done: oneshot::Sender<Result<(), String>>,
     },
     ClearSystemProxy {
-        done: oneshot::Sender<()>,
+        done: oneshot::Sender<Result<(), String>>,
     },
 }
 

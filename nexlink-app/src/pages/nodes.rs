@@ -88,12 +88,16 @@ pub fn NodesPage() -> impl IntoView {
                         <h2 class="text-lg font-semibold text-slate-200">"Proxy"</h2>
                         <p class="text-sm text-slate-400 mt-0.5">
                             {move || {
-                                let running = status
+                                let proxy = status
                                     .get()
-                                    .and_then(|s| s.proxy_status.as_ref().map(|p| (p.running, p.unified_port)));
-                                match running {
-                                    Some((true, port)) => format!("UNIFIED :{port} | System Proxy Active"),
-                                    Some((false, _)) => "Stopped".to_string(),
+                                    .map(|s| (s.proxy_status, s.system_proxy_enabled));
+                                match proxy {
+                                    Some((Some(p), true)) if p.running =>
+                                        format!("UNIFIED :{} | System Proxy Active", p.unified_port),
+                                    Some((Some(p), false)) if p.running =>
+                                        format!("UNIFIED :{} | System Proxy Inactive", p.unified_port),
+                                    Some((Some(_), _)) => "Stopped".to_string(),
+                                    Some((None, _)) => "Not initialized".to_string(),
                                     None => "Not initialized".to_string(),
                                 }
                             }}

@@ -9,7 +9,7 @@ use libp2p::swarm::SwarmEvent;
 use libp2p::{autonat, identify, relay, rendezvous, Multiaddr, PeerId};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{mpsc, oneshot, RwLock};
 use tokio::time::{interval, Duration};
 use tracing::{debug, info, warn};
 
@@ -28,6 +28,24 @@ async fn request_credentials(
 
     let creds: ProxyCredentials = serde_json::from_slice(&buf)?;
     Ok(creds)
+}
+
+async fn refresh_proxy_credentials(
+    shared: &Arc<RwLock<SharedState>>,
+    control: &mut libp2p_stream::Control,
+    relay_peer_id: PeerId,
+) -> Result<ProxyCredentials> {
+    let creds = request_credentials(control, relay_peer_id).await?;
+    {
+        let mut state = shared.write().await;
+        state.proxy_username = Some(creds.username.clone());
+        state.proxy_password = Some(creds.password.clone());
+    }
+    Ok(creds)
+}
+
+fn send_command_result(done: oneshot::Sender<Result<(), String>>, result: Result<(), String>) {
+    let _ = done.send(result);
 }
 
 pub async fn run_swarm_task(
@@ -97,7 +115,6 @@ pub async fn run_swarm_task(
     let mut last_bytes_sent: u64 = 0;
     let mut last_bytes_received: u64 = 0;
     let mut proxy_guard = nexlink_lib::sys_proxy::ProxyGuard::new();
-    let mut credentials_requested = false;
     let mut proxy_credentials: Option<ProxyCredentials> = None;
 
     info!(%peer_id, "Swarm task started");
@@ -118,18 +135,11 @@ pub async fn run_swarm_task(
                             node_selector.set_connected(remote, true);
                         }
 
-                        // Request credentials from relay on first connection
-                        if Some(remote) == relay_peer_id && !credentials_requested {
-                            credentials_requested = true;
+                        if Some(remote) == relay_peer_id && proxy_credentials.is_none() {
                             let mut ctl = stream_control.clone();
-                            match request_credentials(&mut ctl, remote).await {
+                            match refresh_proxy_credentials(&shared, &mut ctl, remote).await {
                                 Ok(creds) => {
                                     info!(username = %creds.username, "Received proxy credentials from relay");
-                                    {
-                                        let mut state = shared.write().await;
-                                        state.proxy_username = Some(creds.username.clone());
-                                        state.proxy_password = Some(creds.password.clone());
-                                    }
                                     proxy_credentials = Some(creds);
                                 }
                                 Err(e) => {
@@ -327,6 +337,19 @@ pub async fn run_swarm_task(
 
             _ = discover_tick.tick() => {
                 if let Some(relay) = relay_peer_id {
+                    if proxy_credentials.is_none() {
+                        let mut ctl = stream_control.clone();
+                        match refresh_proxy_credentials(&shared, &mut ctl, relay).await {
+                            Ok(creds) => {
+                                info!(username = %creds.username, "Refreshed proxy credentials from relay");
+                                proxy_credentials = Some(creds);
+                            }
+                            Err(e) => {
+                                warn!("Failed to refresh credentials from relay: {e}");
+                            }
+                        }
+                    }
+
                     if registered {
                         let namespace = shared.read().await.namespace.clone();
                         if let Ok(ns) = rendezvous::Namespace::new(namespace) {
@@ -344,12 +367,11 @@ pub async fn run_swarm_task(
             Some(cmd) = cmd_rx.recv() => {
                 match cmd {
                     AppCommand::StartProxy { unified_port, done } => {
-                        if let Some(provider_peer) = connected_provider {
+                        let result = if let Some(provider_peer) = connected_provider {
                             if let Some(creds) = proxy_credentials.clone() {
                                 let control = stream_control.clone();
                                 let tc = traffic_counter.clone();
 
-                                // Start unified proxy that handles both SOCKS5 and HTTP CONNECT
                                 let h = tokio::spawn(async move {
                                     if let Err(e) = proxy::unified_proxy::start_unified_proxy(unified_port, provider_peer, control, tc, creds).await {
                                         warn!("Unified proxy error: {e}");
@@ -361,13 +383,18 @@ pub async fn run_swarm_task(
                                 shared.write().await.proxy_status = Some(status.clone());
                                 let _ = app.emit("proxy-status", &status);
                                 info!(unified_port, %provider_peer, "Unified proxy started");
+                                Ok(())
                             } else {
-                                warn!("No proxy credentials available, cannot start proxy");
+                                let msg = "No proxy credentials available, cannot start proxy".to_string();
+                                warn!("{msg}");
+                                Err(msg)
                             }
                         } else {
-                            warn!("No provider connected, cannot start proxy");
-                        }
-                        let _ = done.send(());
+                            let msg = "No provider connected, cannot start proxy".to_string();
+                            warn!("{msg}");
+                            Err(msg)
+                        };
+                        send_command_result(done, result);
                     }
                     AppCommand::StopProxy { done } => {
                         // Auto-clear system proxy if active
@@ -384,7 +411,7 @@ pub async fn run_swarm_task(
                         shared.write().await.proxy_status = Some(status.clone());
                         let _ = app.emit("proxy-status", &status);
                         info!("Proxy stopped");
-                        let _ = done.send(());
+                        send_command_result(done, Ok(()));
                     }
                     AppCommand::ConnectNode { peer_id: target } => {
                         if let Ok(pid) = target.parse::<PeerId>() {
@@ -557,7 +584,7 @@ pub async fn run_swarm_task(
                     }
                     AppCommand::SetSystemProxy { done } => {
                         let state = shared.read().await;
-                        if let Some(ref ps) = state.proxy_status {
+                        let result = if let Some(ref ps) = state.proxy_status {
                             if ps.running {
                                 let unified_port = ps.unified_port;
                                 drop(state);
@@ -567,26 +594,44 @@ pub async fn run_swarm_task(
                                         shared.write().await.system_proxy_enabled = true;
                                         let _ = app.emit("system-proxy-changed", true);
                                         info!("System proxy enabled");
+                                        Ok(())
                                     }
                                     Err(e) => {
-                                        warn!("Failed to set system proxy: {e}");
+                                        let msg = format!("Failed to set system proxy: {e}");
+                                        warn!("{msg}");
+                                        Err(msg)
                                     }
                                 }
                             } else {
-                                warn!("Cannot set system proxy: proxy not running");
+                                let msg = "Cannot set system proxy: proxy not running".to_string();
+                                warn!("{msg}");
+                                Err(msg)
                             }
-                        }
-                        let _ = done.send(());
+                        } else {
+                            let msg = "Cannot set system proxy: proxy not initialized".to_string();
+                            warn!("{msg}");
+                            Err(msg)
+                        };
+                        send_command_result(done, result);
                     }
                     AppCommand::ClearSystemProxy { done } => {
-                        if let Err(e) = nexlink_lib::sys_proxy::clear_system_proxy() {
-                            warn!("Failed to clear system proxy: {e}");
+                        let result = if let Err(e) = nexlink_lib::sys_proxy::clear_system_proxy() {
+                            let msg = format!("Failed to clear system proxy: {e}");
+                            warn!("{msg}");
+                            Err(msg)
+                        } else {
+                            proxy_guard.deactivate();
+                            shared.write().await.system_proxy_enabled = false;
+                            let _ = app.emit("system-proxy-changed", false);
+                            info!("System proxy disabled");
+                            Ok(())
+                        };
+                        if result.is_err() {
+                            proxy_guard.deactivate();
+                            shared.write().await.system_proxy_enabled = false;
+                            let _ = app.emit("system-proxy-changed", false);
                         }
-                        proxy_guard.deactivate();
-                        shared.write().await.system_proxy_enabled = false;
-                        let _ = app.emit("system-proxy-changed", false);
-                        info!("System proxy disabled");
-                        let _ = done.send(());
+                        send_command_result(done, result);
                     }
                 }
             }

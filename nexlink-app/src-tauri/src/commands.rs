@@ -57,8 +57,7 @@ pub async fn start_proxy(
         })
         .await
         .map_err(|e| e.to_string())?;
-    let _ = rx.await;
-    Ok(())
+    rx.await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -69,8 +68,7 @@ pub async fn stop_proxy(state: State<'_, AppState>) -> Result<(), String> {
         .send(AppCommand::StopProxy { done: tx })
         .await
         .map_err(|e| e.to_string())?;
-    let _ = rx.await;
-    Ok(())
+    rx.await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -133,8 +131,7 @@ pub async fn set_system_proxy(state: State<'_, AppState>) -> Result<(), String> 
         .send(AppCommand::SetSystemProxy { done: tx })
         .await
         .map_err(|e| e.to_string())?;
-    let _ = rx.await;
-    Ok(())
+    rx.await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -145,6 +142,5 @@ pub async fn clear_system_proxy(state: State<'_, AppState>) -> Result<(), String
         .send(AppCommand::ClearSystemProxy { done: tx })
         .await
         .map_err(|e| e.to_string())?;
-    let _ = rx.await;
-    Ok(())
+    rx.await.map_err(|e| e.to_string())?
 }
