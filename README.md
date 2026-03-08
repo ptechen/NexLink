@@ -58,7 +58,7 @@ cargo run -- --relay /ip4/127.0.0.1/udp/4001/quic-v1/p2p/<RELAY_PEER_ID> --ai-pr
 #### 3. 启动 AI 代理应用
 ```bash
 cd nexlink-app
-cargo run -- server 8080
+cargo tauri dev
 ```
 
 ### 使用示例
