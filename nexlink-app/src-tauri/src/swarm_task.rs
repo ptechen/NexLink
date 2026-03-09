@@ -10,7 +10,7 @@ use libp2p::{autonat, identify, ping, relay, rendezvous, Multiaddr, PeerId};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::{mpsc, oneshot, RwLock};
-use tokio::time::{interval, Duration};
+use tokio::time::{interval, Duration, MissedTickBehavior};
 use tracing::{debug, info, warn};
 
 /// Request proxy credentials from relay via the credentials stream protocol
@@ -102,7 +102,11 @@ pub async fn run_swarm_task(
     swarm.listen_on("/ip4/0.0.0.0/udp/0/quic-v1".parse()?)?;
 
     let mut discover_tick = interval(Duration::from_secs(30));
+    discover_tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    discover_tick.tick().await;
     let mut relay_retry_tick = interval(Duration::from_secs(5));
+    relay_retry_tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    relay_retry_tick.tick().await;
     let mut relay_peer_id: Option<PeerId> = None;
     let mut relay_addr: Option<Multiaddr> = None;
     let mut relay_dial_in_flight = false;
@@ -148,6 +152,8 @@ pub async fn run_swarm_task(
     let traffic_counter = nexlink_lib::traffic::TrafficCounter::new();
     let mut node_selector = nexlink_lib::node_score::NodeSelector::new();
     let mut traffic_tick = interval(Duration::from_secs(1));
+    traffic_tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    traffic_tick.tick().await;
     let mut last_bytes_sent: u64 = 0;
     let mut last_bytes_received: u64 = 0;
     let mut proxy_guard = nexlink_lib::sys_proxy::ProxyGuard::new();
@@ -413,7 +419,7 @@ pub async fn run_swarm_task(
 
             _ = discover_tick.tick() => {
                 if let Some(relay) = relay_peer_id {
-                    if proxy_credentials.is_none() {
+                    if swarm.is_connected(&relay) && proxy_credentials.is_none() {
                         let mut ctl = stream_control.clone();
                         match refresh_proxy_credentials(&shared, &mut ctl, relay).await {
                             Ok(creds) => {
