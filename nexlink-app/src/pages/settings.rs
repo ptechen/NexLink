@@ -29,7 +29,13 @@ pub fn SettingsPage() -> impl IntoView {
         let relay = relay_input.get();
         spawn_local(async move {
             match api::update_config(Some(&relay), None).await {
-                Ok(_) => set_save_msg.set(Some("Settings saved".to_string())),
+                Ok(_) => {
+                    set_save_msg.set(Some("Settings saved".to_string()));
+                    if let Ok(s) = api::get_status().await {
+                        set_relay.set(s.relay_addr.clone());
+                        set_status.set(Some(s));
+                    }
+                }
                 Err(e) => set_save_msg.set(Some(format!("Error: {e}"))),
             }
         });

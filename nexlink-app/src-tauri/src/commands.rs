@@ -91,14 +91,17 @@ pub async fn update_config(
     relay_addr: Option<String>,
     namespace: Option<String>,
 ) -> Result<(), String> {
+    let (tx, rx) = oneshot::channel();
     state
         .cmd_tx
         .send(AppCommand::UpdateConfig {
             relay_addr,
             namespace,
+            done: tx,
         })
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    rx.await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
