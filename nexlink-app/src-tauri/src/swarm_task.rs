@@ -469,10 +469,7 @@ pub async fn run_swarm_task(
                             }
                         }
                     }
-                    AppCommand::UpdateConfig { relay_addr: new_relay, namespace: new_ns, done } => {
-                        let data_path = std::path::Path::new(&data_dir_str);
-                        let mut net_cfg = nexlink_lib::network_id::load_network_config(data_path);
-
+                    AppCommand::UpdateConfig { relay_addr: new_relay, namespace: new_ns } => {
                         let new_relay = new_relay.and_then(|addr| {
                             let trimmed = addr.trim().to_string();
                             if trimmed.is_empty() {
@@ -483,8 +480,6 @@ pub async fn run_swarm_task(
                         });
 
                         if let Some(addr_str) = new_relay.clone() {
-                            net_cfg.relay_addr = Some(addr_str.clone());
-
                             // Parse and dial new relay
                             if let Ok(maddr) = addr_str.parse::<Multiaddr>() {
                                 if let Some(libp2p::multiaddr::Protocol::P2p(pid)) = maddr.iter().last() {
@@ -499,43 +494,21 @@ pub async fn run_swarm_task(
                                 }
                             }
                         } else {
-                            net_cfg.relay_addr = None;
                             relay_peer_id = None;
                             relay_addr = None;
                             registered = false;
                             proxy_credentials = None;
                         }
 
-                        if let Some(ns) = new_ns.clone() {
-                            net_cfg.namespace = ns;
-                        }
-
-                        let result = nexlink_lib::network_id::save_network_config(data_path, &net_cfg)
-                            .map(|_| {
-                                info!(
-                                    path = %data_path.display(),
-                                    relay_addr = ?net_cfg.relay_addr,
-                                    namespace = %net_cfg.namespace,
-                                    "Saved network config"
-                                );
-                            })
-                            .map_err(|e| {
-                                let msg = format!("Failed to save config: {e}");
-                                warn!("{msg}");
-                                msg
-                            });
-
-                        if result.is_ok() {
+                        {
                             let mut state = shared.write().await;
-                            if let Some(addr_str) = new_relay {
-                                state.relay_addr = addr_str;
+                            if new_relay.is_some() {
+                                state.relay_addr = new_relay.clone().unwrap_or_default();
                             }
                             if let Some(ns) = new_ns {
                                 state.namespace = ns;
                             }
                         }
-
-                        send_command_result(done, result.map(|_| ()));
                     }
                     AppCommand::JoinNetwork { name, password } => {
                         let mut config = nexlink_lib::network_id::NetworkConfig::private(&name, &password);

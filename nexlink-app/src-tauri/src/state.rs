@@ -65,7 +65,6 @@ pub enum AppCommand {
     UpdateConfig {
         relay_addr: Option<String>,
         namespace: Option<String>,
-        done: oneshot::Sender<Result<(), String>>,
     },
     JoinNetwork {
         name: String,
