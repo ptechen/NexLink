@@ -11,7 +11,7 @@ use nexlink_lib::proxy::{credentials::derive_credentials, CREDENTIALS_PROTOCOL, 
 use clap::Parser;
 use libp2p::futures::{AsyncWriteExt, StreamExt};
 use libp2p::swarm::SwarmEvent;
-use libp2p::{Multiaddr, PeerId};
+use libp2p::{ping, Multiaddr, PeerId};
 use tokio::signal;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
@@ -59,6 +59,16 @@ async fn wait_for_provider_registration(
     }
 
     false
+}
+
+fn is_ping_timeout(failure: &ping::Failure) -> bool {
+    match failure {
+        ping::Failure::Timeout => true,
+        ping::Failure::Unsupported => false,
+        ping::Failure::Other { error } => error
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io_error| io_error.kind() == std::io::ErrorKind::TimedOut),
+    }
 }
 
 #[tokio::main]
@@ -226,6 +236,9 @@ async fn main() -> Result<()> {
                                     }
                                     Err(error) => {
                                         warn!(%peer_id, ?connection, "Ping failed: {error}");
+                                        if is_ping_timeout(&error) && swarm.close_connection(connection) {
+                                            info!(%peer_id, ?connection, "Closing timed-out ping connection");
+                                        }
                                     }
                                 }
                             }
