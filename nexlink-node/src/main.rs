@@ -14,7 +14,7 @@ use libp2p::{autonat, relay};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::{signal, time};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
@@ -255,7 +255,16 @@ async fn main() -> Result<()> {
                         }
                     }
                     SwarmEvent::Behaviour(NexlinkBehaviourEvent::Ping(event)) => {
-                        info!("Ping: {event:?}");
+                        let peer_id = event.peer;
+                        let connection = event.connection;
+                        match event.result {
+                            Ok(rtt) => {
+                                debug!(%peer_id, ?connection, rtt_ms = rtt.as_millis(), "Ping ok");
+                            }
+                            Err(error) => {
+                                warn!(%peer_id, ?connection, "Ping failed: {error}");
+                            }
+                        }
                     }
                     SwarmEvent::Behaviour(NexlinkBehaviourEvent::Identify(
                         libp2p::identify::Event::Received {

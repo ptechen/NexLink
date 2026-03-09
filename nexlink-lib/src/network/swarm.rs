@@ -10,6 +10,15 @@ use super::behaviour::{NexlinkBehaviour, RelayBehaviour};
 
 const PROTOCOL_VERSION: &str = "/nexlink/0.1.0";
 
+fn build_ping_behaviour() -> ping::Behaviour {
+    ping::Behaviour::new(
+        // Relay and circuit-backed connections can take noticeably longer to negotiate substreams.
+        ping::Config::new()
+            .with_interval(Duration::from_secs(30))
+            .with_timeout(Duration::from_secs(60)),
+    )
+}
+
 /// Build a Swarm for client/provider nodes (uses relay client)
 pub async fn build_client_swarm(identity: &NodeIdentity) -> Result<Swarm<NexlinkBehaviour>> {
     let swarm = libp2p::SwarmBuilder::with_existing_identity(identity.keypair().clone())
@@ -29,7 +38,7 @@ pub async fn build_client_swarm(identity: &NodeIdentity) -> Result<Swarm<Nexlink
                     key.public(),
                 )),
                 rendezvous_client: rendezvous::client::Behaviour::new(key.clone()),
-                ping: ping::Behaviour::new(ping::Config::default()),
+                ping: build_ping_behaviour(),
                 stream: stream::Behaviour::new(),
                 autonat: autonat::Behaviour::new(
                     key.public().to_peer_id(),
@@ -74,7 +83,7 @@ pub async fn build_relay_swarm(
                 rendezvous_server: rendezvous::server::Behaviour::new(
                     rendezvous::server::Config::default(),
                 ),
-                ping: ping::Behaviour::new(ping::Config::default()),
+                ping: build_ping_behaviour(),
                 stream: stream::Behaviour::new(),
                 autonat: autonat::Behaviour::new(
                     key.public().to_peer_id(),
