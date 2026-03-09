@@ -179,17 +179,7 @@ async fn main() -> Result<()> {
                         info!(%peer_id, "Connected to peer");
 
                         if peer_id == relay_peer_id {
-                            if cli.provider {
-                                let mut ctl = stream_control.clone();
-                                match sync_allowed_credentials(&allowed_credentials, &mut ctl, relay_peer_id).await {
-                                    Ok(count) => {
-                                        info!(count, "Synced client credentials from relay");
-                                    }
-                                    Err(e) => {
-                                        warn!("Failed to sync credentials from relay: {e}");
-                                    }
-                                }
-                            } else if proxy_credentials.is_none() {
+                            if !cli.provider && proxy_credentials.is_none() {
                                 let mut ctl = stream_control.clone();
                                 match request_credentials(&mut ctl, relay_peer_id).await {
                                     Ok(creds) => {
@@ -208,6 +198,19 @@ async fn main() -> Result<()> {
                             rendezvous::client::Event::Registered { namespace, .. } => {
                                 info!(?namespace, "Registered with rendezvous");
                                 registered = true;
+
+                                if cli.provider {
+                                    let mut ctl = stream_control.clone();
+                                    match sync_allowed_credentials(&allowed_credentials, &mut ctl, relay_peer_id).await {
+                                        Ok(count) => {
+                                            info!(count, "Synced client credentials from relay");
+                                        }
+                                        Err(e) => {
+                                            warn!("Failed to sync credentials from relay: {e}");
+                                        }
+                                    }
+                                }
+
                                 swarm.behaviour_mut().rendezvous_client.discover(
                                     Some(namespace),
                                     None,
