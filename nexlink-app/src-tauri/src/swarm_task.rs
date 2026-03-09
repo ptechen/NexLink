@@ -64,6 +64,13 @@ pub async fn run_swarm_task(
     let data_path = std::path::Path::new(&data_dir_str);
     let net_config = nexlink_lib::network_id::load_network_config(data_path);
     let initial_namespace = net_config.namespace.clone();
+    info!(
+        path = %data_path.display(),
+        relay_addr = ?net_config.relay_addr,
+        namespace = %net_config.namespace,
+        mode = %net_config.mode,
+        "Loaded network config"
+    );
 
     // Update shared state with peer ID and network config
     {
@@ -466,6 +473,15 @@ pub async fn run_swarm_task(
                         let data_path = std::path::Path::new(&data_dir_str);
                         let mut net_cfg = nexlink_lib::network_id::load_network_config(data_path);
 
+                        let new_relay = new_relay.and_then(|addr| {
+                            let trimmed = addr.trim().to_string();
+                            if trimmed.is_empty() {
+                                None
+                            } else {
+                                Some(trimmed)
+                            }
+                        });
+
                         if let Some(addr_str) = new_relay.clone() {
                             net_cfg.relay_addr = Some(addr_str.clone());
 
@@ -482,6 +498,12 @@ pub async fn run_swarm_task(
                                     info!(%pid, "Connecting to new relay");
                                 }
                             }
+                        } else {
+                            net_cfg.relay_addr = None;
+                            relay_peer_id = None;
+                            relay_addr = None;
+                            registered = false;
+                            proxy_credentials = None;
                         }
 
                         if let Some(ns) = new_ns.clone() {
@@ -489,6 +511,14 @@ pub async fn run_swarm_task(
                         }
 
                         let result = nexlink_lib::network_id::save_network_config(data_path, &net_cfg)
+                            .map(|_| {
+                                info!(
+                                    path = %data_path.display(),
+                                    relay_addr = ?net_cfg.relay_addr,
+                                    namespace = %net_cfg.namespace,
+                                    "Saved network config"
+                                );
+                            })
                             .map_err(|e| {
                                 let msg = format!("Failed to save config: {e}");
                                 warn!("{msg}");

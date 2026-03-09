@@ -85,7 +85,7 @@ pub async fn get_proxy_status(
     Ok(shared.proxy_status.clone())
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn update_config(
     state: State<'_, AppState>,
     relay_addr: Option<String>,
