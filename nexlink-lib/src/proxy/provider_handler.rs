@@ -89,13 +89,12 @@ pub async fn handle_proxy_stream(
     let p2p_stream = reader.into_inner();
 
     // Convert libp2p stream (futures AsyncRead/Write) to tokio-compatible
-    let p2p_compat = p2p_stream.compat();
-    let (mut p2p_read, mut p2p_write) = tokio::io::split(p2p_compat);
-    let (mut tcp_read, mut tcp_write) = tcp_stream.into_split();
+    let mut p2p_compat = p2p_stream.compat();
+    let mut tcp_stream = tcp_stream;
 
     // Write any buffered data to TCP first
     if !buffered.is_empty() {
-        tokio::io::AsyncWriteExt::write_all(&mut tcp_write, &buffered).await?;
+        tokio::io::AsyncWriteExt::write_all(&mut tcp_stream, &buffered).await?;
     }
 
     // Bidirectional relay
@@ -103,26 +102,8 @@ pub async fn handle_proxy_stream(
         tc.inc_connections();
     }
 
-    if let Some(tc) = traffic {
-        let recv = &tc.bytes_received;
-        let sent = &tc.bytes_sent;
-        tokio::select! {
-            r = crate::traffic::counted_copy(&mut p2p_read, &mut tcp_write, recv) => {
-                if let Err(e) = r { warn!(%peer_id, "client->target: {e}"); }
-            }
-            r = crate::traffic::counted_copy(&mut tcp_read, &mut p2p_write, sent) => {
-                if let Err(e) = r { warn!(%peer_id, "target->client: {e}"); }
-            }
-        }
-    } else {
-        tokio::select! {
-            r = tokio::io::copy(&mut p2p_read, &mut tcp_write) => {
-                if let Err(e) = r { warn!(%peer_id, "client->target: {e}"); }
-            }
-            r = tokio::io::copy(&mut tcp_read, &mut p2p_write) => {
-                if let Err(e) = r { warn!(%peer_id, "target->client: {e}"); }
-            }
-        }
+    if let Err(e) = crate::traffic::relay_bidirectional(&mut tcp_stream, &mut p2p_compat, traffic).await {
+        warn!(%peer_id, "socket relay failed: {e}");
     }
 
     if let Some(tc) = traffic {
