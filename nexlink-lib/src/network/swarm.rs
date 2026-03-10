@@ -2,8 +2,8 @@ use crate::identity::NodeIdentity;
 use anyhow::Result;
 use libp2p::swarm::Swarm;
 use libp2p::{autonat, identify, noise, ping, relay, rendezvous, yamux};
-use std::time::Duration;
 use libp2p_stream as stream;
+use std::time::Duration;
 use tracing::info;
 
 use super::behaviour::{NexlinkBehaviour, RelayBehaviour};

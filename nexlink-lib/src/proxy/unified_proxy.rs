@@ -30,7 +30,9 @@ pub async fn start_unified_proxy(
         let creds = credentials.clone();
 
         tokio::spawn(async move {
-            if let Err(e) = handle_unified_connection(socket, peer, &mut ctl, &counter, &creds).await {
+            if let Err(e) =
+                handle_unified_connection(socket, peer, &mut ctl, &counter, &creds).await
+            {
                 warn!(%addr, "Unified proxy error: {e:#}");
             }
         });
@@ -54,7 +56,15 @@ async fn handle_unified_connection(
     if first_byte == 0x05 {
         handle_socks5_from_start(socket, provider_peer, control, traffic, credentials).await
     } else {
-        handle_http_connect_from_start(socket, first_byte, provider_peer, control, traffic, credentials).await
+        handle_http_connect_from_start(
+            socket,
+            first_byte,
+            provider_peer,
+            control,
+            traffic,
+            credentials,
+        )
+        .await
     }
 }
 
@@ -141,7 +151,9 @@ async fn handle_socks5_from_start(
     // Bidirectional relay between SOCKS5 client and P2P stream
     traffic.inc_connections();
     let mut p2p_compat = p2p_stream.compat();
-    if let Err(e) = crate::traffic::relay_bidirectional(&mut socket, &mut p2p_compat, Some(traffic)).await {
+    if let Err(e) =
+        crate::traffic::relay_bidirectional(&mut socket, &mut p2p_compat, Some(traffic)).await
+    {
         warn!("socket relay failed: {e}");
     }
     traffic.dec_connections();
@@ -178,7 +190,11 @@ async fn handle_http_connect_from_start(
 
     // Parse the request line
     let request_line_str = String::from_utf8_lossy(&request_line);
-    let parts: Vec<&str> = request_line_str.trim_end_matches("\r\n").trim().split_whitespace().collect();
+    let parts: Vec<&str> = request_line_str
+        .trim_end_matches("\r\n")
+        .trim()
+        .split_whitespace()
+        .collect();
 
     if parts.len() < 3 || parts[0] != "CONNECT" {
         let response = "HTTP/1.1 400 Bad Request\r\n\r\n";
@@ -198,7 +214,7 @@ async fn handle_http_connect_from_start(
         // Check for \r\n\r\n pattern (end of headers)
         if header_buffer.len() >= 4 {
             let len = header_buffer.len();
-            if header_buffer[len-4..] == [b'\r', b'\n', b'\r', b'\n'] {
+            if header_buffer[len - 4..] == [b'\r', b'\n', b'\r', b'\n'] {
                 break;
             }
         }
@@ -229,7 +245,9 @@ async fn handle_http_connect_from_start(
     // Bidirectional relay between HTTP client and P2P stream
     traffic.inc_connections();
     let mut p2p_compat = p2p_stream.compat();
-    if let Err(e) = crate::traffic::relay_bidirectional(&mut socket, &mut p2p_compat, Some(traffic)).await {
+    if let Err(e) =
+        crate::traffic::relay_bidirectional(&mut socket, &mut p2p_compat, Some(traffic)).await
+    {
         warn!("socket relay failed: {e}");
     }
     traffic.dec_connections();

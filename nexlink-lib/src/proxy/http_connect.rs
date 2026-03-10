@@ -88,7 +88,9 @@ async fn handle_http_connect(
     // Bidirectional relay between HTTP client and P2P stream
     traffic.inc_connections();
     let mut p2p_compat = p2p_stream.compat();
-    if let Err(e) = crate::traffic::relay_bidirectional(&mut socket, &mut p2p_compat, Some(traffic)).await {
+    if let Err(e) =
+        crate::traffic::relay_bidirectional(&mut socket, &mut p2p_compat, Some(traffic)).await
+    {
         warn!("socket relay failed: {e}");
     }
     traffic.dec_connections();

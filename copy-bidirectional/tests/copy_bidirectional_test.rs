@@ -114,8 +114,16 @@ async fn test_copy_bidirectional_with_traffic_counting() {
     });
 
     // 双向复制任务
-    let copy_task =
-        tokio::spawn(async move { copy_bidirectional(&mut a_server, &mut b_server, &traffic_clone, &exit_flag, &mut times).await });
+    let copy_task = tokio::spawn(async move {
+        copy_bidirectional(
+            &mut a_server,
+            &mut b_server,
+            &traffic_clone,
+            &exit_flag,
+            &mut times,
+        )
+        .await
+    });
 
     let a_result = a_task.await.unwrap();
     let b_result = b_task.await.unwrap();
@@ -127,7 +135,10 @@ async fn test_copy_bidirectional_with_traffic_counting() {
 
     // 验证流量统计
     let total_traffic = traffic.get_total();
-    assert_eq!(total_traffic, b"Message from A".len() as u64 + b"Message from B".len() as u64);
+    assert_eq!(
+        total_traffic,
+        b"Message from A".len() as u64 + b"Message from B".len() as u64
+    );
 }
 
 #[tokio::test]
@@ -164,8 +175,16 @@ async fn test_copy_bidirectional_large_data() {
     });
 
     // 双向复制
-    let copy_task =
-        tokio::spawn(async move { copy_bidirectional(&mut a_server, &mut b_server, &traffic_clone, &exit_flag, &mut times).await });
+    let copy_task = tokio::spawn(async move {
+        copy_bidirectional(
+            &mut a_server,
+            &mut b_server,
+            &traffic_clone,
+            &exit_flag,
+            &mut times,
+        )
+        .await
+    });
 
     let b_result = b_task.await.unwrap();
     a_task.await.unwrap();
@@ -214,7 +233,16 @@ async fn test_copy_bidirectional_concurrent_writes() {
     });
 
     // 双向复制
-    let copy_task = tokio::spawn(async move { copy_bidirectional(&mut a_server, &mut b_server, &traffic, &exit_flag, &mut times).await });
+    let copy_task = tokio::spawn(async move {
+        copy_bidirectional(
+            &mut a_server,
+            &mut b_server,
+            &traffic,
+            &exit_flag,
+            &mut times,
+        )
+        .await
+    });
 
     let a_result = a_task.await.unwrap();
     let b_result = b_task.await.unwrap();
@@ -246,8 +274,16 @@ async fn test_copy_bidirectional_empty_stream() {
     });
 
     // 双向复制
-    let copy_task =
-        tokio::spawn(async move { copy_bidirectional(&mut a_server, &mut b_server, &traffic_clone, &exit_flag, &mut times).await });
+    let copy_task = tokio::spawn(async move {
+        copy_bidirectional(
+            &mut a_server,
+            &mut b_server,
+            &traffic_clone,
+            &exit_flag,
+            &mut times,
+        )
+        .await
+    });
 
     a_task.await.unwrap();
     b_task.await.unwrap();
@@ -282,8 +318,16 @@ async fn test_copy_bidirectional_one_way() {
     });
 
     // 双向复制
-    let copy_task =
-        tokio::spawn(async move { copy_bidirectional(&mut a_server, &mut b_server, &traffic_clone, &exit_flag, &mut times).await });
+    let copy_task = tokio::spawn(async move {
+        copy_bidirectional(
+            &mut a_server,
+            &mut b_server,
+            &traffic_clone,
+            &exit_flag,
+            &mut times,
+        )
+        .await
+    });
 
     a_task.await.unwrap();
     let b_result = b_task.await.unwrap();
@@ -327,8 +371,16 @@ async fn test_traffic_counter_separate_directions() {
     });
 
     // 双向复制
-    let copy_task =
-        tokio::spawn(async move { copy_bidirectional(&mut a_server, &mut b_server, &traffic_clone, &exit_flag, &mut times).await });
+    let copy_task = tokio::spawn(async move {
+        copy_bidirectional(
+            &mut a_server,
+            &mut b_server,
+            &traffic_clone,
+            &exit_flag,
+            &mut times,
+        )
+        .await
+    });
 
     let a_result = a_task.await.unwrap();
     let b_result = b_task.await.unwrap();
@@ -364,9 +416,15 @@ async fn test_times_counter() {
     });
 
     // 双向复制
-    copy_bidirectional(&mut a_server, &mut b_server, &traffic, &exit_flag, &mut times)
-        .await
-        .unwrap();
+    copy_bidirectional(
+        &mut a_server,
+        &mut b_server,
+        &traffic,
+        &exit_flag,
+        &mut times,
+    )
+    .await
+    .unwrap();
 
     a_task.await.unwrap();
     b_task.await.unwrap();

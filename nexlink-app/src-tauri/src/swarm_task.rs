@@ -1,12 +1,12 @@
 use crate::state::{AppCommand, PeerInfo, ProxyStatus, SharedState};
 use anyhow::Result;
+use libp2p::futures::{AsyncReadExt, StreamExt};
+use libp2p::swarm::SwarmEvent;
+use libp2p::{autonat, identify, ping, relay, rendezvous, Multiaddr, PeerId};
 use nexlink_lib::identity::NodeIdentity;
 use nexlink_lib::network::behaviour::NexlinkBehaviourEvent;
 use nexlink_lib::network::swarm::build_client_swarm;
 use nexlink_lib::proxy::{self, ProxyCredentials, CREDENTIALS_PROTOCOL};
-use libp2p::futures::{AsyncReadExt, StreamExt};
-use libp2p::swarm::SwarmEvent;
-use libp2p::{autonat, identify, ping, relay, rendezvous, Multiaddr, PeerId};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::{mpsc, oneshot, RwLock};
@@ -114,31 +114,31 @@ pub async fn run_swarm_task(
     // Auto-connect to persisted relay
     if let Some(ref addr_str) = net_config.relay_addr {
         match addr_str.parse::<Multiaddr>() {
-            Ok(maddr) => {
-                match maddr.iter().last() {
-                    Some(libp2p::multiaddr::Protocol::P2p(pid)) => {
-                        relay_peer_id = Some(pid);
-                        relay_addr = Some(maddr.clone());
+            Ok(maddr) => match maddr.iter().last() {
+                Some(libp2p::multiaddr::Protocol::P2p(pid)) => {
+                    relay_peer_id = Some(pid);
+                    relay_addr = Some(maddr.clone());
 
-                        match swarm.dial(maddr.clone()) {
-                            Ok(()) => {
-                                relay_dial_in_flight = true;
-                                info!(%pid, addr = %maddr, "Dialing persisted relay");
-                            }
-                            Err(e) => warn!(%pid, addr = %maddr, "Failed to dial persisted relay: {e}"),
+                    match swarm.dial(maddr.clone()) {
+                        Ok(()) => {
+                            relay_dial_in_flight = true;
+                            info!(%pid, addr = %maddr, "Dialing persisted relay");
                         }
+                        Err(e) => warn!(%pid, addr = %maddr, "Failed to dial persisted relay: {e}"),
+                    }
 
-                        let circuit_listen: Multiaddr = format!("{}/p2p-circuit", maddr)
-                            .parse()
-                            .expect("valid relay circuit addr");
-                        match swarm.listen_on(circuit_listen.clone()) {
-                            Ok(_) => info!(%pid, addr = %circuit_listen, "Listening via relay circuit"),
-                            Err(e) => warn!(%pid, addr = %circuit_listen, "Failed to listen via relay circuit: {e}"),
+                    let circuit_listen: Multiaddr = format!("{}/p2p-circuit", maddr)
+                        .parse()
+                        .expect("valid relay circuit addr");
+                    match swarm.listen_on(circuit_listen.clone()) {
+                        Ok(_) => info!(%pid, addr = %circuit_listen, "Listening via relay circuit"),
+                        Err(e) => {
+                            warn!(%pid, addr = %circuit_listen, "Failed to listen via relay circuit: {e}")
                         }
                     }
-                    _ => warn!(addr = %addr_str, "Relay address missing /p2p/<peer_id>"),
                 }
-            }
+                _ => warn!(addr = %addr_str, "Relay address missing /p2p/<peer_id>"),
+            },
             Err(e) => warn!(addr = %addr_str, "Invalid relay address: {e}"),
         }
     }

@@ -124,7 +124,9 @@ async fn handle_socks5(
     // 6. Bidirectional relay between SOCKS5 client and P2P stream
     traffic.inc_connections();
     let mut p2p_compat = p2p_stream.compat();
-    if let Err(e) = crate::traffic::relay_bidirectional(&mut socket, &mut p2p_compat, Some(traffic)).await {
+    if let Err(e) =
+        crate::traffic::relay_bidirectional(&mut socket, &mut p2p_compat, Some(traffic)).await
+    {
         warn!("socket relay failed: {e}");
     }
     traffic.dec_connections();

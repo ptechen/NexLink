@@ -130,7 +130,8 @@ impl PeerTrafficManager {
 
 impl PeerTrafficEntry {
     fn set_quota(&self, quota: Option<u64>) {
-        self.quota_bytes.store(quota.unwrap_or(0), Ordering::Relaxed);
+        self.quota_bytes
+            .store(quota.unwrap_or(0), Ordering::Relaxed);
     }
 
     fn quota(&self) -> Option<u64> {

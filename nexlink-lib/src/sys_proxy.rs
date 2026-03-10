@@ -8,7 +8,7 @@ pub struct SystemProxyState {
 /// Set system-wide HTTP and SOCKS5 proxy to localhost with given port.
 /// For the unified proxy, both HTTP and SOCKS traffic goes through the same port.
 pub fn set_system_proxy(http_port: u16, _socks_port: u16) -> Result<()> {
-    platform::set_proxy(http_port)  // Use unified port for both
+    platform::set_proxy(http_port) // Use unified port for both
 }
 
 /// Clear (disable) system-wide proxy settings.
@@ -141,9 +141,8 @@ mod platform {
         use winreg::RegKey;
 
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-        let (key, _) = hkcu.create_subkey(
-            "Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings",
-        )?;
+        let (key, _) =
+            hkcu.create_subkey("Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings")?;
         key.set_value("ProxyEnable", &1u32)?;
         key.set_value("ProxyServer", &format!("127.0.0.1:{port}"))?;
 
@@ -159,9 +158,8 @@ mod platform {
         use winreg::RegKey;
 
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-        let (key, _) = hkcu.create_subkey(
-            "Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings",
-        )?;
+        let (key, _) =
+            hkcu.create_subkey("Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings")?;
         key.set_value("ProxyEnable", &0u32)?;
 
         notify_system_proxy_change();
@@ -175,9 +173,8 @@ mod platform {
         use winreg::RegKey;
 
         let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-        let key = hkcu.open_subkey(
-            "Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings",
-        )?;
+        let key =
+            hkcu.open_subkey("Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings")?;
         let enabled: u32 = key.get_value("ProxyEnable").unwrap_or(0);
         Ok(SystemProxyState {
             enabled: enabled != 0,

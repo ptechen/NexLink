@@ -1,8 +1,9 @@
+pub mod config;
 pub mod identity;
 pub mod network;
 pub mod network_id;
 pub mod node_score;
-pub mod config;
+pub mod peer_traffic;
 pub mod proxy;
 pub mod sys_proxy;
 pub mod traffic;

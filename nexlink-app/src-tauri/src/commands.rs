@@ -45,10 +45,7 @@ pub async fn disconnect_node(state: State<'_, AppState>) -> Result<(), String> {
 }
 
 #[tauri::command]
-pub async fn start_proxy(
-    state: State<'_, AppState>,
-    unified_port: u16,
-) -> Result<(), String> {
+pub async fn start_proxy(state: State<'_, AppState>, unified_port: u16) -> Result<(), String> {
     let (tx, rx) = oneshot::channel();
     state
         .cmd_tx
@@ -79,9 +76,7 @@ pub async fn get_traffic(state: State<'_, AppState>) -> Result<TrafficStats, Str
 }
 
 #[tauri::command]
-pub async fn get_proxy_status(
-    state: State<'_, AppState>,
-) -> Result<Option<ProxyStatus>, String> {
+pub async fn get_proxy_status(state: State<'_, AppState>) -> Result<Option<ProxyStatus>, String> {
     let shared = state.shared.read().await;
     Ok(shared.proxy_status.clone())
 }
@@ -110,8 +105,7 @@ pub async fn update_config(
         config.namespace = ns;
     }
 
-    nexlink_lib::network_id::save_network_config(&data_dir, &config)
-        .map_err(|e| e.to_string())?;
+    nexlink_lib::network_id::save_network_config(&data_dir, &config).map_err(|e| e.to_string())?;
 
     {
         let mut shared = state.shared.write().await;

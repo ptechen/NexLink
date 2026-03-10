@@ -1,16 +1,17 @@
 use anyhow::Result;
-use dashmap::DashMap;
-use nexlink_lib::config::default_data_dir;
-use nexlink_lib::identity::NodeIdentity;
-use nexlink_lib::network::behaviour::NexlinkBehaviourEvent;
-use nexlink_lib::network::swarm::build_client_swarm;
-use nexlink_lib::proxy::{ProxyCredentials, CREDENTIALS_PROTOCOL, CREDENTIALS_SYNC_PROTOCOL};
 use clap::Parser;
+use dashmap::DashMap;
 use libp2p::futures::{AsyncReadExt, StreamExt};
 use libp2p::rendezvous;
 use libp2p::swarm::SwarmEvent;
 use libp2p::Multiaddr;
 use libp2p::{autonat, ping, relay};
+use nexlink_lib::config::default_data_dir;
+use nexlink_lib::identity::NodeIdentity;
+use nexlink_lib::network::behaviour::NexlinkBehaviourEvent;
+use nexlink_lib::network::swarm::build_client_swarm;
+use nexlink_lib::peer_traffic::PeerTrafficManager;
+use nexlink_lib::proxy::{ProxyCredentials, CREDENTIALS_PROTOCOL, CREDENTIALS_SYNC_PROTOCOL};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::{signal, time};
@@ -125,6 +126,7 @@ async fn main() -> Result<()> {
 
     // If running as provider, spawn the incoming proxy stream handler with credential verification
     let allowed_credentials: Arc<DashMap<String, String>> = Arc::new(DashMap::new());
+    let peer_traffic = PeerTrafficManager::new();
     if cli.provider {
         let mut accept_control = stream_control.clone();
         let mut incoming = accept_control
@@ -132,13 +134,21 @@ async fn main() -> Result<()> {
             .expect("proxy protocol not yet registered");
 
         let creds_map = allowed_credentials.clone();
+        let traffic_stats = peer_traffic.clone();
         tokio::spawn(async move {
             use libp2p::futures::StreamExt;
             while let Some((peer_id, stream)) = incoming.next().await {
                 let map = creds_map.clone();
+                let traffic_stats = traffic_stats.clone();
                 tokio::spawn(async move {
-                    if let Err(e) =
-                        nexlink_lib::proxy::provider_handler::handle_proxy_stream(peer_id, stream, None, Some(&map)).await
+                    if let Err(e) = nexlink_lib::proxy::provider_handler::handle_proxy_stream(
+                        peer_id,
+                        stream,
+                        None,
+                        Some(&traffic_stats),
+                        Some(&map),
+                    )
+                    .await
                     {
                         warn!(%peer_id, "Proxy stream error: {e:#}");
                     }
@@ -166,15 +176,14 @@ async fn main() -> Result<()> {
     info!(%relay_peer_id, "Dialing relay server");
 
     // Listen via relay circuit so other peers can reach us through the relay
-    let relay_circuit_addr: Multiaddr =
-        format!("{relay_addr}/p2p-circuit").parse()?;
+    let relay_circuit_addr: Multiaddr = format!("{relay_addr}/p2p-circuit").parse()?;
     swarm.listen_on(relay_circuit_addr)?;
 
-    let namespace =
-        rendezvous::Namespace::new(cli.namespace.clone()).expect("Invalid namespace");
+    let namespace = rendezvous::Namespace::new(cli.namespace.clone()).expect("Invalid namespace");
     let mut registered = false;
     let mut proxy_started = false;
     let mut discover_interval = time::interval(Duration::from_secs(30));
+    let mut provider_traffic_tick = time::interval(Duration::from_secs(60));
     let mut relay_retry_interval = time::interval(Duration::from_secs(5));
     let mut relay_dial_in_flight = true;
     let mut proxy_credentials: Option<ProxyCredentials> = None;
@@ -439,6 +448,24 @@ async fn main() -> Result<()> {
                             warn!(%relay_peer_id, addr = %relay_addr, "Failed to redial relay: {e}");
                         }
                     }
+                }
+            }
+            _ = provider_traffic_tick.tick(), if cli.provider => {
+                let snapshots = peer_traffic.snapshot_all();
+                if snapshots.is_empty() {
+                    continue;
+                }
+
+                for snapshot in snapshots.into_iter().take(10) {
+                    info!(
+                        peer_id = %snapshot.peer_id,
+                        bytes_sent = snapshot.bytes_sent,
+                        bytes_received = snapshot.bytes_received,
+                        active_connections = snapshot.active_connections,
+                        total_connections = snapshot.total_connections,
+                        quota_exceeded = snapshot.quota_exceeded,
+                        "Provider client traffic snapshot"
+                    );
                 }
             }
             _ = signal::ctrl_c() => {

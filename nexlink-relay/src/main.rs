@@ -3,15 +3,17 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
-use nexlink_lib::config::default_data_dir;
-use nexlink_lib::identity::NodeIdentity;
-use nexlink_lib::network::behaviour::RelayBehaviourEvent;
-use nexlink_lib::network::swarm::build_relay_swarm;
-use nexlink_lib::proxy::{credentials::derive_credentials, CREDENTIALS_PROTOCOL, CREDENTIALS_SYNC_PROTOCOL};
 use clap::Parser;
 use libp2p::futures::{AsyncWriteExt, StreamExt};
 use libp2p::swarm::SwarmEvent;
 use libp2p::{ping, Multiaddr, PeerId};
+use nexlink_lib::config::default_data_dir;
+use nexlink_lib::identity::NodeIdentity;
+use nexlink_lib::network::behaviour::RelayBehaviourEvent;
+use nexlink_lib::network::swarm::build_relay_swarm;
+use nexlink_lib::proxy::{
+    credentials::derive_credentials, CREDENTIALS_PROTOCOL, CREDENTIALS_SYNC_PROTOCOL,
+};
 use tokio::signal;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};

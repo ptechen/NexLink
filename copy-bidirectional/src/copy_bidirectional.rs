@@ -19,7 +19,13 @@ enum TransferState {
     ShuttingDown,
     Done,
 }
-pub async fn copy_bidirectional<A, B, T>(a: &mut A, b: &mut B, info: &Arc<T>, exit_flag: &bool, times: &mut u64) -> io::Result<()>
+pub async fn copy_bidirectional<A, B, T>(
+    a: &mut A,
+    b: &mut B,
+    info: &Arc<T>,
+    exit_flag: &bool,
+    times: &mut u64,
+) -> io::Result<()>
 where
     A: AsyncRead + AsyncWrite + Unpin + ?Sized,
     B: AsyncRead + AsyncWrite + Unpin + ?Sized,
@@ -122,7 +128,15 @@ where
     loop {
         match state {
             TransferState::Running(buf) => {
-                ready!(buf.poll_copy(cx, r.as_mut(), w.as_mut(), info, is_upload, exit_flag, times,))?;
+                ready!(buf.poll_copy(
+                    cx,
+                    r.as_mut(),
+                    w.as_mut(),
+                    info,
+                    is_upload,
+                    exit_flag,
+                    times,
+                ))?;
                 *state = TransferState::ShuttingDown;
             }
             TransferState::ShuttingDown => {

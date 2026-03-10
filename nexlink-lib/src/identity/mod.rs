@@ -2,9 +2,9 @@ use anyhow::{Context, Result};
 use libp2p::identity::Keypair;
 use libp2p::PeerId;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
 use std::fs;
-use tracing::{info, warn, error};
+use std::path::Path;
+use tracing::{error, info, warn};
 
 #[derive(Serialize, Deserialize)]
 struct StoredIdentity {
@@ -72,8 +72,7 @@ impl NodeIdentity {
         let stored: StoredIdentity = serde_json::from_str(&json)?;
 
         // Validate the keypair bytes before attempting to decode
-        Self::validate_keypair_bytes(&stored.keypair_bytes)
-            .context("Key validation failed")?;
+        Self::validate_keypair_bytes(&stored.keypair_bytes).context("Key validation failed")?;
 
         let keypair = Keypair::from_protobuf_encoding(&stored.keypair_bytes)
             .context("Failed to parse: invalid multihash")?;
@@ -105,7 +104,8 @@ impl NodeIdentity {
         while final_backup_path.exists() {
             counter += 1;
             final_backup_path = path.with_extension(format!("corrupted_{}.json", counter));
-            if counter > 10 { // Prevent infinite loop
+            if counter > 10 {
+                // Prevent infinite loop
                 break;
             }
         }
@@ -122,7 +122,10 @@ impl NodeIdentity {
         match Self::load_from_file_validated(path) {
             Ok(identity) => Ok(identity),
             Err(original_error) => {
-                warn!(?path, "Failed to load identity, attempting recovery: {}", original_error);
+                warn!(
+                    ?path,
+                    "Failed to load identity, attempting recovery: {}", original_error
+                );
 
                 // Backup the corrupted file before attempting to regenerate
                 if let Err(backup_err) = Self::backup_corrupted_file(path) {

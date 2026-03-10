@@ -11,7 +11,8 @@ pub fn derive_network_id(name: &str, password: &str) -> String {
     let ikm = format!("{name}:{password}");
     let hk = Hkdf::<Sha256>::new(Some(SALT), ikm.as_bytes());
     let mut okm = [0u8; 16];
-    hk.expand(INFO, &mut okm).expect("16 bytes is valid for HKDF");
+    hk.expand(INFO, &mut okm)
+        .expect("16 bytes is valid for HKDF");
     hex::encode(okm)
 }
 
@@ -30,7 +31,11 @@ pub struct NetworkConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub relay_addr: Option<String>,
     /// Last selected provider PeerId
-    #[serde(default, skip_serializing_if = "Option::is_none", alias = "last_exit_node")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        alias = "last_exit_node"
+    )]
     pub last_provider: Option<String>,
 }
 

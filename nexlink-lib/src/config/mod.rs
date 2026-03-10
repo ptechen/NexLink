@@ -21,7 +21,7 @@ impl Default for NodeConfig {
             listen_addr: "/ip4/0.0.0.0/udp/0/quic-v1".to_string(),
             relay_addr: None,
             namespace: "nexlink-public".to_string(),
-            unified_port: 7890,  // Default unified port
+            unified_port: 7890, // Default unified port
             provider: false,
         }
     }

@@ -38,7 +38,11 @@ impl CopyBuffer {
         }
     }
 
-    fn poll_fill_buf<R>(&mut self, cx: &mut Context<'_>, reader: Pin<&mut R>) -> Poll<io::Result<()>>
+    fn poll_fill_buf<R>(
+        &mut self,
+        cx: &mut Context<'_>,
+        reader: Pin<&mut R>,
+    ) -> Poll<io::Result<()>>
     where
         R: AsyncRead + ?Sized,
     {
@@ -55,7 +59,12 @@ impl CopyBuffer {
         res
     }
 
-    fn poll_write_buf<R, W>(&mut self, cx: &mut Context<'_>, mut reader: Pin<&mut R>, mut writer: Pin<&mut W>) -> Poll<io::Result<usize>>
+    fn poll_write_buf<R, W>(
+        &mut self,
+        cx: &mut Context<'_>,
+        mut reader: Pin<&mut R>,
+        mut writer: Pin<&mut W>,
+    ) -> Poll<io::Result<usize>>
     where
         R: AsyncRead + ?Sized,
         W: AsyncWrite + ?Sized,
@@ -119,7 +128,10 @@ impl CopyBuffer {
                                 self.amt = 0;
                             }
                             if *exit_flag {
-                                return Poll::Ready(Err(io::Error::new(io::ErrorKind::TimedOut, "shutdown")));
+                                return Poll::Ready(Err(io::Error::new(
+                                    io::ErrorKind::TimedOut,
+                                    "shutdown",
+                                )));
                             }
                             return Poll::Pending;
                         }
@@ -136,7 +148,10 @@ impl CopyBuffer {
                         TrafficTrait::add(traffic_fn, self.amt as u64, is_upload);
                         self.amt = 0;
                     }
-                    return Poll::Ready(Err(io::Error::new(io::ErrorKind::WriteZero, "write zero byte into writer")));
+                    return Poll::Ready(Err(io::Error::new(
+                        io::ErrorKind::WriteZero,
+                        "write zero byte into writer",
+                    )));
                 } else {
                     self.pos += i;
                     self.amt += i;
@@ -151,7 +166,10 @@ impl CopyBuffer {
             // If pos larger than cap, this loop will never stop.
             // In particular, user's wrong poll_write implementation returning
             // incorrect written length may lead to thread blocking.
-            debug_assert!(self.pos <= self.cap, "writer returned length larger than input slice");
+            debug_assert!(
+                self.pos <= self.cap,
+                "writer returned length larger than input slice"
+            );
 
             // All data has been written, the buffer can be considered empty again
             self.pos = 0;

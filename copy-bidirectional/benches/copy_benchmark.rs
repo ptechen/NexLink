@@ -1,5 +1,6 @@
 use copy_bidirectional::copy_bidirectional::{
-    LARGE_BUF_SIZE, SMALL_BUF_SIZE, TrafficTrait, copy_bidirectional, copy_bidirectional_with_buffer_size,
+    LARGE_BUF_SIZE, SMALL_BUF_SIZE, TrafficTrait, copy_bidirectional,
+    copy_bidirectional_with_buffer_size,
 };
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use std::io;
@@ -26,27 +27,31 @@ fn bench_copy_data_sizes(c: &mut Criterion) {
 
     // 测试不同数据大小
     for size in [
-        32 * 1024,        // 32KB - 中等数据
-        64 * 1024,        // 32KB - 中等数据
-        128 * 1024,        // 32KB - 中等数据
-        256 * 1024,        // 32KB - 中等数据
-        512 * 1024,        // 32KB - 中等数据
+        32 * 1024,  // 32KB - 中等数据
+        64 * 1024,  // 32KB - 中等数据
+        128 * 1024, // 32KB - 中等数据
+        256 * 1024, // 32KB - 中等数据
+        512 * 1024, // 32KB - 中等数据
     ] {
         group.throughput(Throughput::Bytes(size as u64));
 
         // 测试默认缓冲区大小
-        group.bench_with_input(BenchmarkId::new("default", format!("{}KB", size / 1024)), &size, |b, &size| {
-            b.to_async(&runtime).iter(|| async move {
-                let (mut source, mut dest) = create_test_buffers(size);
-                let mut times = 0u64;
-                let exit_flag = false;
-                let traffic = Arc::new(NoOpTraffic);
+        group.bench_with_input(
+            BenchmarkId::new("default", format!("{}KB", size / 1024)),
+            &size,
+            |b, &size| {
+                b.to_async(&runtime).iter(|| async move {
+                    let (mut source, mut dest) = create_test_buffers(size);
+                    let mut times = 0u64;
+                    let exit_flag = false;
+                    let traffic = Arc::new(NoOpTraffic);
 
-                copy_bidirectional(&mut source, &mut dest, &traffic, &exit_flag, &mut times)
-                    .await
-                    .unwrap();
-            });
-        });
+                    copy_bidirectional(&mut source, &mut dest, &traffic, &exit_flag, &mut times)
+                        .await
+                        .unwrap();
+                });
+            },
+        );
 
         // 对于大数据，测试大缓冲区
         if size >= 1024 * 1024 {
@@ -60,9 +65,16 @@ fn bench_copy_data_sizes(c: &mut Criterion) {
                         let exit_flag = false;
                         let traffic = Arc::new(NoOpTraffic);
 
-                        copy_bidirectional_with_buffer_size(&mut source, &mut dest, &traffic, &exit_flag, &mut times, LARGE_BUF_SIZE)
-                            .await
-                            .unwrap();
+                        copy_bidirectional_with_buffer_size(
+                            &mut source,
+                            &mut dest,
+                            &traffic,
+                            &exit_flag,
+                            &mut times,
+                            LARGE_BUF_SIZE,
+                        )
+                        .await
+                        .unwrap();
                     });
                 },
             );
@@ -70,18 +82,29 @@ fn bench_copy_data_sizes(c: &mut Criterion) {
 
         // 对于小数据，测试小缓冲区
         if size <= 32 * 1024 {
-            group.bench_with_input(BenchmarkId::new("small_buf", format!("{}KB", size / 1024)), &size, |b, &size| {
-                b.to_async(&runtime).iter(|| async move {
-                    let (mut source, mut dest) = create_test_buffers(size);
-                    let mut times = 0u64;
-                    let exit_flag = false;
-                    let traffic = Arc::new(NoOpTraffic);
+            group.bench_with_input(
+                BenchmarkId::new("small_buf", format!("{}KB", size / 1024)),
+                &size,
+                |b, &size| {
+                    b.to_async(&runtime).iter(|| async move {
+                        let (mut source, mut dest) = create_test_buffers(size);
+                        let mut times = 0u64;
+                        let exit_flag = false;
+                        let traffic = Arc::new(NoOpTraffic);
 
-                    copy_bidirectional_with_buffer_size(&mut source, &mut dest, &traffic, &exit_flag, &mut times, SMALL_BUF_SIZE)
+                        copy_bidirectional_with_buffer_size(
+                            &mut source,
+                            &mut dest,
+                            &traffic,
+                            &exit_flag,
+                            &mut times,
+                            SMALL_BUF_SIZE,
+                        )
                         .await
                         .unwrap();
-                });
-            });
+                    });
+                },
+            );
         }
     }
 

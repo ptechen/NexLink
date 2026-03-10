@@ -1,4 +1,4 @@
-use copy_bidirectional::copy_bidirectional::{TrafficTrait, copy_bidirectional};
+use copy_bidirectional::copy_bidirectional::{copy_bidirectional, TrafficTrait};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -75,12 +75,27 @@ where
     let mut times = 0u64;
 
     if let Some(traffic) = traffic {
-        let traffic = Arc::new(traffic.clone());
-        copy_bidirectional(a, b, &traffic, &exit_flag, &mut times).await
+        relay_bidirectional_with_counter(a, b, traffic).await
     } else {
         let traffic = Arc::new(NoTraffic);
         copy_bidirectional(a, b, &traffic, &exit_flag, &mut times).await
     }
+}
+
+pub async fn relay_bidirectional_with_counter<A, B, T>(
+    a: &mut A,
+    b: &mut B,
+    traffic: &T,
+) -> tokio::io::Result<()>
+where
+    A: AsyncRead + AsyncWrite + Unpin + ?Sized,
+    B: AsyncRead + AsyncWrite + Unpin + ?Sized,
+    T: TrafficTrait + Clone,
+{
+    let exit_flag = false;
+    let mut times = 0u64;
+    let traffic = Arc::new(traffic.clone());
+    copy_bidirectional(a, b, &traffic, &exit_flag, &mut times).await
 }
 
 /// Copy data from reader to writer, counting bytes transferred.
