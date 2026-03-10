@@ -364,7 +364,7 @@ pub async fn run_swarm_task(
                             relay_dial_in_flight = false;
                         }
                         // Retry via relay circuit, but not if already a circuit failure (avoid loops)
-                        if let (Some(ref r_addr), Some(r_peer)) = (&relay_addr, relay_peer_id) {
+                        if let (Some(r_addr), Some(r_peer)) = (&relay_addr, relay_peer_id) {
                             if remote != r_peer && !err_str.contains("p2p-circuit") {
                                 if let Ok(circuit_addr) = format!(
                                     "{}/p2p-circuit/p2p/{}", r_addr, remote
