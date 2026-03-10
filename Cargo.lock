@@ -3407,6 +3407,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "nexlink-traffic"
+version = "0.1.0"
+dependencies = [
+ "dashmap",
+ "libp2p",
+]
+
+[[package]]
 name = "nix"
 version = "0.26.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
