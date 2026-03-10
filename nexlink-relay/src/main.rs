@@ -11,10 +11,10 @@ use nexlink_lib::proxy::{credentials::derive_credentials, CREDENTIALS_PROTOCOL, 
 use clap::Parser;
 use libp2p::futures::{AsyncWriteExt, StreamExt};
 use libp2p::swarm::SwarmEvent;
-use libp2p::{Multiaddr, PeerId};
+use libp2p::{ping, Multiaddr, PeerId};
 use tokio::signal;
 use tokio::sync::RwLock;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
@@ -39,6 +39,36 @@ struct Cli {
     /// Secret for deriving proxy credentials (hex string)
     #[arg(long)]
     credentials_secret: Option<String>,
+}
+
+async fn wait_for_provider_registration(
+    provider_peers: &Arc<RwLock<HashSet<PeerId>>>,
+    requester: PeerId,
+) -> bool {
+    if provider_peers.read().await.contains(&requester) {
+        return true;
+    }
+
+    // The provider can receive the register response before the relay main loop
+    // has processed `PeerRegistered` and updated `provider_peers`.
+    for _ in 0..10 {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        if provider_peers.read().await.contains(&requester) {
+            return true;
+        }
+    }
+
+    false
+}
+
+fn is_ping_timeout(failure: &ping::Failure) -> bool {
+    match failure {
+        ping::Failure::Timeout => true,
+        ping::Failure::Unsupported => false,
+        ping::Failure::Other { error } => error
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io_error| io_error.kind() == std::io::ErrorKind::TimedOut),
+    }
 }
 
 #[tokio::main]
@@ -114,12 +144,12 @@ async fn main() -> Result<()> {
     let secret_for_sync = secret.clone();
     tokio::spawn(async move {
         while let Some((requester, mut stream)) = sync_incoming.next().await {
-            let providers = providers_for_sync.read().await;
-            if !providers.contains(&requester) {
+            if !wait_for_provider_registration(&providers_for_sync, requester).await {
                 warn!(%requester, "Rejected credentials sync for unregistered provider");
                 let _ = stream.close().await;
                 continue;
             }
+            let providers = providers_for_sync.read().await;
             let peers = peers_for_sync.read().await;
             let all_creds: Vec<nexlink_lib::proxy::ProxyCredentials> = peers
                 .iter()
@@ -198,7 +228,19 @@ async fn main() -> Result<()> {
                                 info!("Identify: {e:?}");
                             }
                             RelayBehaviourEvent::Ping(e) => {
-                                info!("Ping: {e:?}");
+                                let peer_id = e.peer;
+                                let connection = e.connection;
+                                match e.result {
+                                    Ok(rtt) => {
+                                        debug!(%peer_id, ?connection, rtt_ms = rtt.as_millis(), "Ping ok");
+                                    }
+                                    Err(error) => {
+                                        warn!(%peer_id, ?connection, "Ping failed: {error}");
+                                        if is_ping_timeout(&error) && swarm.close_connection(connection) {
+                                            info!(%peer_id, ?connection, "Closing timed-out ping connection");
+                                        }
+                                    }
+                                }
                             }
                             RelayBehaviourEvent::Stream(_) => {}
                         }

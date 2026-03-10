@@ -81,6 +81,7 @@ pub fn load_network_config(data_dir: &Path) -> NetworkConfig {
 }
 
 pub fn save_network_config(data_dir: &Path, config: &NetworkConfig) -> anyhow::Result<()> {
+    std::fs::create_dir_all(data_dir)?;
     let path = data_dir.join(CONFIG_FILE);
     let content = serde_json::to_string_pretty(config)?;
     std::fs::write(&path, content)?;

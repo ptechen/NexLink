@@ -5,11 +5,15 @@ mod swarm_task;
 use state::{AppCommand, AppState, SharedState};
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
+use tracing_subscriber::EnvFilter;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tracing_subscriber::fmt()
-        .with_env_filter("nexlink=debug,info")
+        .with_env_filter(
+            EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| EnvFilter::new("nexlink_app_lib=debug,nexlink_lib=debug,info")),
+        )
         .init();
 
     let (cmd_tx, cmd_rx) = mpsc::channel::<AppCommand>(32);

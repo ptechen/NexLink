@@ -87,19 +87,9 @@ async fn handle_http_connect(
 
     // Bidirectional relay between HTTP client and P2P stream
     traffic.inc_connections();
-    let p2p_compat = p2p_stream.compat();
-    let (mut p2p_read, mut p2p_write) = tokio::io::split(p2p_compat);
-    let (mut client_read, mut client_write) = socket.into_split();
-
-    let sent = &traffic.bytes_sent;
-    let recv = &traffic.bytes_received;
-    tokio::select! {
-        r = crate::traffic::counted_copy(&mut client_read, &mut p2p_write, sent) => {
-            if let Err(e) = r { warn!("client->p2p: {e}"); }
-        }
-        r = crate::traffic::counted_copy(&mut p2p_read, &mut client_write, recv) => {
-            if let Err(e) = r { warn!("p2p->client: {e}"); }
-        }
+    let mut p2p_compat = p2p_stream.compat();
+    if let Err(e) = crate::traffic::relay_bidirectional(&mut socket, &mut p2p_compat, Some(traffic)).await {
+        warn!("socket relay failed: {e}");
     }
     traffic.dec_connections();
 

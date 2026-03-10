@@ -6,11 +6,11 @@ use nexlink_lib::network::swarm::build_client_swarm;
 use nexlink_lib::proxy::{self, ProxyCredentials, CREDENTIALS_PROTOCOL};
 use libp2p::futures::{AsyncReadExt, StreamExt};
 use libp2p::swarm::SwarmEvent;
-use libp2p::{autonat, identify, relay, rendezvous, Multiaddr, PeerId};
+use libp2p::{autonat, identify, ping, relay, rendezvous, Multiaddr, PeerId};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::{mpsc, oneshot, RwLock};
-use tokio::time::{interval, Duration};
+use tokio::time::{interval, Duration, MissedTickBehavior};
 use tracing::{debug, info, warn};
 
 /// Request proxy credentials from relay via the credentials stream protocol
@@ -48,6 +48,16 @@ fn send_command_result(done: oneshot::Sender<Result<(), String>>, result: Result
     let _ = done.send(result);
 }
 
+fn is_ping_timeout(failure: &ping::Failure) -> bool {
+    match failure {
+        ping::Failure::Timeout => true,
+        ping::Failure::Unsupported => false,
+        ping::Failure::Other { error } => error
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io_error| io_error.kind() == std::io::ErrorKind::TimedOut),
+    }
+}
+
 pub async fn run_swarm_task(
     app: AppHandle,
     mut cmd_rx: mpsc::Receiver<AppCommand>,
@@ -64,6 +74,13 @@ pub async fn run_swarm_task(
     let data_path = std::path::Path::new(&data_dir_str);
     let net_config = nexlink_lib::network_id::load_network_config(data_path);
     let initial_namespace = net_config.namespace.clone();
+    info!(
+        path = %data_path.display(),
+        relay_addr = ?net_config.relay_addr,
+        namespace = %net_config.namespace,
+        mode = %net_config.mode,
+        "Loaded network config"
+    );
 
     // Update shared state with peer ID and network config
     {
@@ -85,21 +102,44 @@ pub async fn run_swarm_task(
     swarm.listen_on("/ip4/0.0.0.0/udp/0/quic-v1".parse()?)?;
 
     let mut discover_tick = interval(Duration::from_secs(30));
+    discover_tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    discover_tick.tick().await;
+    let mut relay_retry_tick = interval(Duration::from_secs(5));
+    relay_retry_tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    relay_retry_tick.tick().await;
     let mut relay_peer_id: Option<PeerId> = None;
     let mut relay_addr: Option<Multiaddr> = None;
+    let mut relay_dial_in_flight = false;
 
     // Auto-connect to persisted relay
     if let Some(ref addr_str) = net_config.relay_addr {
-        if let Ok(maddr) = addr_str.parse::<Multiaddr>() {
-            if let Some(libp2p::multiaddr::Protocol::P2p(pid)) = maddr.iter().last() {
-                relay_peer_id = Some(pid);
-                relay_addr = Some(maddr.clone());
+        match addr_str.parse::<Multiaddr>() {
+            Ok(maddr) => {
+                match maddr.iter().last() {
+                    Some(libp2p::multiaddr::Protocol::P2p(pid)) => {
+                        relay_peer_id = Some(pid);
+                        relay_addr = Some(maddr.clone());
 
-                let circuit_listen: Multiaddr = format!("{}/p2p-circuit", maddr).parse().unwrap();
-                let _ = swarm.listen_on(circuit_listen);
-                let _ = swarm.dial(maddr);
-                info!(%pid, "Auto-connecting to persisted relay");
+                        match swarm.dial(maddr.clone()) {
+                            Ok(()) => {
+                                relay_dial_in_flight = true;
+                                info!(%pid, addr = %maddr, "Dialing persisted relay");
+                            }
+                            Err(e) => warn!(%pid, addr = %maddr, "Failed to dial persisted relay: {e}"),
+                        }
+
+                        let circuit_listen: Multiaddr = format!("{}/p2p-circuit", maddr)
+                            .parse()
+                            .expect("valid relay circuit addr");
+                        match swarm.listen_on(circuit_listen.clone()) {
+                            Ok(_) => info!(%pid, addr = %circuit_listen, "Listening via relay circuit"),
+                            Err(e) => warn!(%pid, addr = %circuit_listen, "Failed to listen via relay circuit: {e}"),
+                        }
+                    }
+                    _ => warn!(addr = %addr_str, "Relay address missing /p2p/<peer_id>"),
+                }
             }
+            Err(e) => warn!(addr = %addr_str, "Invalid relay address: {e}"),
         }
     }
     // Load last provider preference
@@ -112,6 +152,8 @@ pub async fn run_swarm_task(
     let traffic_counter = nexlink_lib::traffic::TrafficCounter::new();
     let mut node_selector = nexlink_lib::node_score::NodeSelector::new();
     let mut traffic_tick = interval(Duration::from_secs(1));
+    traffic_tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    traffic_tick.tick().await;
     let mut last_bytes_sent: u64 = 0;
     let mut last_bytes_received: u64 = 0;
     let mut proxy_guard = nexlink_lib::sys_proxy::ProxyGuard::new();
@@ -129,10 +171,14 @@ pub async fn run_swarm_task(
                         swarm.add_external_address(address);
                     }
                     SwarmEvent::ConnectionEstablished { peer_id: remote, .. } => {
-                        debug!(%remote, "Connection established");
+                        info!(%remote, "Connection established");
                         // Only track non-relay peers in node selector
                         if Some(remote) != relay_peer_id {
                             node_selector.set_connected(remote, true);
+                        }
+
+                        if Some(remote) == relay_peer_id {
+                            relay_dial_in_flight = false;
                         }
 
                         if Some(remote) == relay_peer_id && proxy_credentials.is_none() {
@@ -148,25 +194,26 @@ pub async fn run_swarm_task(
                             }
                         }
 
-                        // Client mode: discover providers (don't register — clients shouldn't be discoverable)
+                    }
+                    SwarmEvent::Behaviour(NexlinkBehaviourEvent::Identify(
+                        identify::Event::Received { peer_id: remote, .. }
+                    )) => {
+                        info!(%remote, "Identified peer");
                         if Some(remote) == relay_peer_id && !registered {
                             registered = true;
                             let namespace = shared.read().await.namespace.clone();
-                            if let Ok(ns) = rendezvous::Namespace::new(namespace) {
+                            if let Ok(ns) = rendezvous::Namespace::new(namespace.clone()) {
                                 swarm.behaviour_mut().rendezvous_client.discover(
                                     Some(ns),
                                     None,
                                     None,
                                     remote,
                                 );
+                                info!(%remote, "Relay identified, discovering providers");
+                            } else {
+                                warn!(namespace, "Invalid namespace, cannot discover providers");
                             }
-                            info!("Discovering providers");
                         }
-                    }
-                    SwarmEvent::Behaviour(NexlinkBehaviourEvent::Identify(
-                        identify::Event::Received { peer_id: remote, .. }
-                    )) => {
-                        debug!(%remote, "Identified peer");
                     }
                     SwarmEvent::Behaviour(NexlinkBehaviourEvent::Identify(_)) => {}
                     SwarmEvent::Behaviour(NexlinkBehaviourEvent::RendezvousClient(event)) => {
@@ -240,6 +287,7 @@ pub async fn run_swarm_task(
                     }
                     SwarmEvent::Behaviour(NexlinkBehaviourEvent::Ping(event)) => {
                         let remote = event.peer;
+                        let connection = event.connection;
                         match event.result {
                             Ok(rtt) => {
                                 let rtt_ms = rtt.as_millis() as u64;
@@ -280,7 +328,16 @@ pub async fn run_swarm_task(
                                     }
                                 }
                             }
-                            Err(_) => {
+                            Err(error) => {
+                                if Some(remote) == relay_peer_id && is_ping_timeout(&error) {
+                                    registered = false;
+                                    proxy_credentials = None;
+                                    relay_dial_in_flight = false;
+                                    warn!(%remote, ?connection, "Relay ping failed: {error}");
+                                    if swarm.close_connection(connection) {
+                                        info!(%remote, ?connection, "Closing timed-out relay connection");
+                                    }
+                                }
                                 if Some(remote) != relay_peer_id {
                                     node_selector.record_failure(remote);
                                 }
@@ -289,14 +346,23 @@ pub async fn run_swarm_task(
                     }
                     SwarmEvent::Behaviour(NexlinkBehaviourEvent::Stream(_)) => {}
                     SwarmEvent::ConnectionClosed { peer_id: remote, .. } => {
-                        debug!(%remote, "Disconnected");
-                        if Some(remote) != relay_peer_id {
+                        info!(%remote, "Disconnected");
+                        if Some(remote) == relay_peer_id {
+                            registered = false;
+                            proxy_credentials = None;
+                            relay_dial_in_flight = false;
+                        } else {
                             node_selector.set_connected(remote, false);
                         }
                     }
                     SwarmEvent::OutgoingConnectionError { peer_id: Some(remote), error, .. } => {
                         let err_str = error.to_string();
                         warn!(%remote, "Connection failed: {error}");
+                        if Some(remote) == relay_peer_id {
+                            registered = false;
+                            proxy_credentials = None;
+                            relay_dial_in_flight = false;
+                        }
                         // Retry via relay circuit, but not if already a circuit failure (avoid loops)
                         if let (Some(ref r_addr), Some(r_peer)) = (&relay_addr, relay_peer_id) {
                             if remote != r_peer && !err_str.contains("p2p-circuit") {
@@ -335,9 +401,25 @@ pub async fn run_swarm_task(
                 state.traffic.active_connections = snap.active_connections;
             }
 
+            _ = relay_retry_tick.tick() => {
+                if let (Some(relay), Some(addr)) = (relay_peer_id, relay_addr.as_ref()) {
+                    if !swarm.is_connected(&relay) && !relay_dial_in_flight {
+                        match swarm.dial(addr.clone()) {
+                            Ok(()) => {
+                                relay_dial_in_flight = true;
+                                info!(%relay, addr = %addr, "Retrying relay connection");
+                            }
+                            Err(e) => {
+                                warn!(%relay, addr = %addr, "Failed to retry relay connection: {e}");
+                            }
+                        }
+                    }
+                }
+            }
+
             _ = discover_tick.tick() => {
                 if let Some(relay) = relay_peer_id {
-                    if proxy_credentials.is_none() {
+                    if swarm.is_connected(&relay) && proxy_credentials.is_none() {
                         let mut ctl = stream_control.clone();
                         match refresh_proxy_credentials(&shared, &mut ctl, relay).await {
                             Ok(creds) => {
@@ -463,35 +545,63 @@ pub async fn run_swarm_task(
                         }
                     }
                     AppCommand::UpdateConfig { relay_addr: new_relay, namespace: new_ns } => {
-                        let mut state = shared.write().await;
-                        if let Some(addr_str) = new_relay {
-                            state.relay_addr = addr_str.clone();
+                        let new_relay = new_relay.and_then(|addr| {
+                            let trimmed = addr.trim().to_string();
+                            if trimmed.is_empty() {
+                                None
+                            } else {
+                                Some(trimmed)
+                            }
+                        });
+
+                        if let Some(addr_str) = new_relay.clone() {
                             // Parse and dial new relay
-                            if let Ok(maddr) = addr_str.parse::<Multiaddr>() {
-                                if let Some(libp2p::multiaddr::Protocol::P2p(pid)) = maddr.iter().last() {
-                                    relay_peer_id = Some(pid);
-                                    relay_addr = Some(maddr.clone());
-                                    registered = false;
+                            match addr_str.parse::<Multiaddr>() {
+                                Ok(maddr) => {
+                                    match maddr.iter().last() {
+                                        Some(libp2p::multiaddr::Protocol::P2p(pid)) => {
+                                            relay_peer_id = Some(pid);
+                                            relay_addr = Some(maddr.clone());
+                                            registered = false;
+                                            proxy_credentials = None;
 
-                                    // Listen via relay circuit
-                                    let circuit_listen: Multiaddr = format!("{}/p2p-circuit", maddr).parse().unwrap();
-                                    let _ = swarm.listen_on(circuit_listen);
+                                            match swarm.dial(maddr.clone()) {
+                                                Ok(()) => {
+                                                    relay_dial_in_flight = true;
+                                                    info!(%pid, addr = %maddr, "Dialing new relay");
+                                                }
+                                                Err(e) => warn!(%pid, addr = %maddr, "Failed to dial new relay: {e}"),
+                                            }
 
-                                    let _ = swarm.dial(maddr);
-                                    info!(%pid, "Connecting to new relay");
+                                            let circuit_listen: Multiaddr = format!("{}/p2p-circuit", maddr)
+                                                .parse()
+                                                .expect("valid relay circuit addr");
+                                            match swarm.listen_on(circuit_listen.clone()) {
+                                                Ok(_) => info!(%pid, addr = %circuit_listen, "Listening via new relay circuit"),
+                                                Err(e) => warn!(%pid, addr = %circuit_listen, "Failed to listen via new relay circuit: {e}"),
+                                            }
+                                        }
+                                        _ => warn!(addr = %addr_str, "Relay address missing /p2p/<peer_id>"),
+                                    }
                                 }
+                                Err(e) => warn!(addr = %addr_str, "Invalid relay address: {e}"),
                             }
-
-                            // Persist relay_addr
-                            let data_path = std::path::Path::new(&data_dir_str);
-                            let mut net_cfg = nexlink_lib::network_id::load_network_config(data_path);
-                            net_cfg.relay_addr = Some(addr_str);
-                            if let Err(e) = nexlink_lib::network_id::save_network_config(data_path, &net_cfg) {
-                                warn!("Failed to persist relay addr: {e}");
-                            }
+                        } else {
+                            relay_peer_id = None;
+                            relay_addr = None;
+                            registered = false;
+                            proxy_credentials = None;
+                            relay_dial_in_flight = false;
                         }
-                        if let Some(ns) = new_ns {
-                            state.namespace = ns;
+
+                        {
+                            let mut state = shared.write().await;
+                            if new_relay.is_some() {
+                                state.relay_addr = new_relay.clone().unwrap_or_default();
+                            }
+                            if let Some(ns) = new_ns {
+                                state.namespace = ns;
+                            }
                         }
                     }
                     AppCommand::JoinNetwork { name, password } => {

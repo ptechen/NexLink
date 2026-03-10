@@ -83,7 +83,6 @@ pub async fn update_config(
     namespace: Option<&str>,
 ) -> Result<(), String> {
     #[derive(Serialize)]
-    #[serde(rename_all = "camelCase")]
     struct Args<'a> {
         relay_addr: Option<&'a str>,
         namespace: Option<&'a str>,

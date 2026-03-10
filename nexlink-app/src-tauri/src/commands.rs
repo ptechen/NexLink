@@ -1,6 +1,7 @@
 use crate::state::{AppCommand, AppState, PeerInfo, ProxyStatus, SharedState, TrafficStats};
 use tauri::State;
 use tokio::sync::oneshot;
+use tracing::{info, warn};
 
 #[tauri::command]
 pub async fn get_identity(state: State<'_, AppState>) -> Result<String, String> {
@@ -85,20 +86,58 @@ pub async fn get_proxy_status(
     Ok(shared.proxy_status.clone())
 }
 
-#[tauri::command]
+#[tauri::command(rename_all = "snake_case")]
 pub async fn update_config(
     state: State<'_, AppState>,
     relay_addr: Option<String>,
     namespace: Option<String>,
 ) -> Result<(), String> {
-    state
-        .cmd_tx
-        .send(AppCommand::UpdateConfig {
-            relay_addr,
-            namespace,
-        })
-        .await
-        .map_err(|e| e.to_string())
+    let data_dir = {
+        let shared = state.shared.read().await;
+        std::path::PathBuf::from(shared.data_dir.clone())
+    };
+
+    let relay_addr = relay_addr.map(|addr| addr.trim().to_string());
+    let normalized_relay = relay_addr
+        .as_ref()
+        .and_then(|addr| (!addr.is_empty()).then(|| addr.clone()));
+
+    let mut config = nexlink_lib::network_id::load_network_config(&data_dir);
+    if relay_addr.is_some() {
+        config.relay_addr = normalized_relay.clone();
+    }
+    if let Some(ns) = namespace.clone() {
+        config.namespace = ns;
+    }
+
+    nexlink_lib::network_id::save_network_config(&data_dir, &config)
+        .map_err(|e| e.to_string())?;
+
+    {
+        let mut shared = state.shared.write().await;
+        if relay_addr.is_some() {
+            shared.relay_addr = normalized_relay.clone().unwrap_or_default();
+        }
+        if let Some(ns) = namespace.clone() {
+            shared.namespace = ns;
+        }
+    }
+
+    info!(
+        path = %data_dir.display(),
+        relay_addr = ?config.relay_addr,
+        namespace = %config.namespace,
+        "Persisted app config"
+    );
+
+    if let Err(e) = state.cmd_tx.try_send(AppCommand::UpdateConfig {
+        relay_addr,
+        namespace,
+    }) {
+        warn!("Failed to enqueue runtime config update: {e}");
+    }
+
+    Ok(())
 }
 
 #[tauri::command]

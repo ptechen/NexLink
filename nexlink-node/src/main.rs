@@ -10,11 +10,11 @@ use libp2p::futures::{AsyncReadExt, StreamExt};
 use libp2p::rendezvous;
 use libp2p::swarm::SwarmEvent;
 use libp2p::Multiaddr;
-use libp2p::{autonat, relay};
+use libp2p::{autonat, ping, relay};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::{signal, time};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser)]
@@ -86,6 +86,16 @@ async fn sync_allowed_credentials(
         allowed_credentials.insert(c.username.clone(), c.password.clone());
     }
     Ok(creds_list.len())
+}
+
+fn is_ping_timeout(failure: &ping::Failure) -> bool {
+    match failure {
+        ping::Failure::Timeout => true,
+        ping::Failure::Unsupported => false,
+        ping::Failure::Other { error } => error
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io_error| io_error.kind() == std::io::ErrorKind::TimedOut),
+    }
 }
 
 #[tokio::main]
@@ -165,6 +175,8 @@ async fn main() -> Result<()> {
     let mut registered = false;
     let mut proxy_started = false;
     let mut discover_interval = time::interval(Duration::from_secs(30));
+    let mut relay_retry_interval = time::interval(Duration::from_secs(5));
+    let mut relay_dial_in_flight = true;
     let mut proxy_credentials: Option<ProxyCredentials> = None;
 
     loop {
@@ -179,17 +191,8 @@ async fn main() -> Result<()> {
                         info!(%peer_id, "Connected to peer");
 
                         if peer_id == relay_peer_id {
-                            if cli.provider {
-                                let mut ctl = stream_control.clone();
-                                match sync_allowed_credentials(&allowed_credentials, &mut ctl, relay_peer_id).await {
-                                    Ok(count) => {
-                                        info!(count, "Synced client credentials from relay");
-                                    }
-                                    Err(e) => {
-                                        warn!("Failed to sync credentials from relay: {e}");
-                                    }
-                                }
-                            } else if proxy_credentials.is_none() {
+                            relay_dial_in_flight = false;
+                            if !cli.provider && proxy_credentials.is_none() {
                                 let mut ctl = stream_control.clone();
                                 match request_credentials(&mut ctl, relay_peer_id).await {
                                     Ok(creds) => {
@@ -208,6 +211,19 @@ async fn main() -> Result<()> {
                             rendezvous::client::Event::Registered { namespace, .. } => {
                                 info!(?namespace, "Registered with rendezvous");
                                 registered = true;
+
+                                if cli.provider {
+                                    let mut ctl = stream_control.clone();
+                                    match sync_allowed_credentials(&allowed_credentials, &mut ctl, relay_peer_id).await {
+                                        Ok(count) => {
+                                            info!(count, "Synced client credentials from relay");
+                                        }
+                                        Err(e) => {
+                                            warn!("Failed to sync credentials from relay: {e}");
+                                        }
+                                    }
+                                }
+
                                 swarm.behaviour_mut().rendezvous_client.discover(
                                     Some(namespace),
                                     None,
@@ -252,7 +268,24 @@ async fn main() -> Result<()> {
                         }
                     }
                     SwarmEvent::Behaviour(NexlinkBehaviourEvent::Ping(event)) => {
-                        info!("Ping: {event:?}");
+                        let peer_id = event.peer;
+                        let connection = event.connection;
+                        match event.result {
+                            Ok(rtt) => {
+                                debug!(%peer_id, ?connection, rtt_ms = rtt.as_millis(), "Ping ok");
+                            }
+                            Err(error) => {
+                                warn!(%peer_id, ?connection, "Ping failed: {error}");
+                                if peer_id == relay_peer_id && is_ping_timeout(&error) {
+                                    registered = false;
+                                    proxy_credentials = None;
+                                    relay_dial_in_flight = false;
+                                    if swarm.close_connection(connection) {
+                                        info!(%peer_id, ?connection, "Closing timed-out relay connection");
+                                    }
+                                }
+                            }
+                        }
                     }
                     SwarmEvent::Behaviour(NexlinkBehaviourEvent::Identify(
                         libp2p::identify::Event::Received {
@@ -323,11 +356,21 @@ async fn main() -> Result<()> {
                     }
                     SwarmEvent::ConnectionClosed { peer_id, .. } => {
                         info!(%peer_id, "Disconnected");
+                        if peer_id == relay_peer_id {
+                            registered = false;
+                            proxy_credentials = None;
+                            relay_dial_in_flight = false;
+                        }
                     }
                     SwarmEvent::OutgoingConnectionError { peer_id, error, .. } => {
                         if let Some(peer) = peer_id {
                             let err_str = error.to_string();
                             warn!(%peer, "Outgoing connection failed: {error}");
+                            if peer == relay_peer_id {
+                                registered = false;
+                                proxy_credentials = None;
+                                relay_dial_in_flight = false;
+                            }
                             if peer != relay_peer_id && !err_str.contains("p2p-circuit") {
                                 let circuit_addr: Multiaddr = format!(
                                     "{relay_addr}/p2p-circuit/p2p/{peer}"
@@ -381,6 +424,19 @@ async fn main() -> Result<()> {
                             Err(e) => {
                                 warn!("Failed to refresh credentials from relay: {e}");
                             }
+                        }
+                    }
+                }
+            }
+            _ = relay_retry_interval.tick() => {
+                if !swarm.is_connected(&relay_peer_id) && !relay_dial_in_flight {
+                    match swarm.dial(relay_addr.clone()) {
+                        Ok(()) => {
+                            relay_dial_in_flight = true;
+                            info!(%relay_peer_id, addr = %relay_addr, "Retrying relay connection");
+                        }
+                        Err(e) => {
+                            warn!(%relay_peer_id, addr = %relay_addr, "Failed to redial relay: {e}");
                         }
                     }
                 }

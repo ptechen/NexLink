@@ -1,7 +1,24 @@
 use crate::api;
 use crate::types::AppStatus;
+use gloo_timers::future::TimeoutFuture;
 use leptos::prelude::*;
 use leptos::task::spawn_local;
+
+fn refresh_status(set_status: WriteSignal<Option<AppStatus>>, set_relay: WriteSignal<String>) {
+    spawn_local(async move {
+        for _ in 0..15 {
+            if let Ok(s) = api::get_status().await {
+                let ready = s.peer_id != "initializing...";
+                set_relay.set(s.relay_addr.clone());
+                set_status.set(Some(s));
+                if ready {
+                    break;
+                }
+            }
+            TimeoutFuture::new(200).await;
+        }
+    });
+}
 
 #[component]
 pub fn SettingsPage() -> impl IntoView {
@@ -17,19 +34,17 @@ pub fn SettingsPage() -> impl IntoView {
 
     // Load current settings
     Effect::new(move |_| {
-        spawn_local(async move {
-            if let Ok(s) = api::get_status().await {
-                set_relay.set(s.relay_addr.clone());
-                set_status.set(Some(s));
-            }
-        });
+        refresh_status(set_status, set_relay);
     });
 
     let save_settings = move |_| {
         let relay = relay_input.get();
         spawn_local(async move {
             match api::update_config(Some(&relay), None).await {
-                Ok(_) => set_save_msg.set(Some("Settings saved".to_string())),
+                Ok(_) => {
+                    set_save_msg.set(Some("Settings saved".to_string()));
+                    refresh_status(set_status, set_relay);
+                }
                 Err(e) => set_save_msg.set(Some(format!("Error: {e}"))),
             }
         });
