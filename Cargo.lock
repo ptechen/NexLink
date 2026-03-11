@@ -3366,6 +3366,7 @@ dependencies = [
  "hkdf",
  "libp2p",
  "libp2p-stream",
+ "nexlink-traffic",
  "serde",
  "serde_json",
  "sha2",
@@ -3385,6 +3386,7 @@ dependencies = [
  "libp2p",
  "libp2p-stream",
  "nexlink-lib",
+ "nexlink-traffic",
  "serde_json",
  "tokio",
  "tracing",
@@ -3398,7 +3400,6 @@ dependencies = [
  "anyhow",
  "clap",
  "libp2p",
- "libp2p-stream",
  "nexlink-lib",
  "serde_json",
  "tokio",
@@ -3410,6 +3411,7 @@ dependencies = [
 name = "nexlink-traffic"
 version = "0.1.0"
 dependencies = [
+ "copy-bidirectional",
  "dashmap",
  "libp2p",
 ]

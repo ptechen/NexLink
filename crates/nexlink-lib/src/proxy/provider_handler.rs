@@ -2,42 +2,13 @@ use anyhow::{Context, Result};
 use dashmap::DashMap;
 use libp2p::futures::AsyncBufReadExt;
 use libp2p::{PeerId, Stream};
+use nexlink_traffic::{add_download, add_upload, snapshot, ProviderTrafficCounter};
 use std::sync::Arc;
 use tokio::net::TcpStream;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tracing::{info, warn};
 
-use crate::peer_traffic::PeerTrafficManager;
 use crate::traffic::TrafficCounter;
-
-#[derive(Clone)]
-struct ProviderTrafficCounter {
-    peer_id: PeerId,
-    aggregate: Option<TrafficCounter>,
-    per_peer: PeerTrafficManager,
-}
-
-impl copy_bidirectional::copy_bidirectional::TrafficTrait for ProviderTrafficCounter {
-    fn add(info: &Arc<Self>, size: u64, is_upload: bool) {
-        if let Some(aggregate) = &info.aggregate {
-            if is_upload {
-                aggregate.add_sent(size);
-            } else {
-                aggregate.add_received(size);
-            }
-        }
-
-        let result = if is_upload {
-            info.per_peer.record_sent(info.peer_id, size)
-        } else {
-            info.per_peer.record_received(info.peer_id, size)
-        };
-
-        if let Err(error) = result {
-            warn!(peer_id = %info.peer_id, "Peer traffic accounting rejected bytes: {error}");
-        }
-    }
-}
 
 /// Handle an incoming proxy stream from a client node.
 /// Protocol: "AUTH username password\n", then "host:port\n", then bidirectional raw bytes.
@@ -46,7 +17,6 @@ pub async fn handle_proxy_stream(
     peer_id: PeerId,
     stream: Stream,
     traffic: Option<&TrafficCounter>,
-    peer_traffic: Option<&PeerTrafficManager>,
     allowed_credentials: Option<&Arc<DashMap<String, String>>>,
 ) -> Result<()> {
     info!(%peer_id, "Handling proxy stream");
@@ -132,21 +102,9 @@ pub async fn handle_proxy_stream(
     if let Some(tc) = traffic {
         tc.inc_connections();
     }
-    if let Some(manager) = peer_traffic {
-        manager.open_connection(peer_id)?;
-    }
-
-    let relay_result = if let Some(manager) = peer_traffic {
-        let counter = ProviderTrafficCounter {
-            peer_id,
-            aggregate: traffic.cloned(),
-            per_peer: manager.clone(),
-        };
-        crate::traffic::relay_bidirectional_with_counter(&mut tcp_stream, &mut p2p_compat, &counter)
-            .await
-    } else {
-        crate::traffic::relay_bidirectional(&mut tcp_stream, &mut p2p_compat, traffic).await
-    };
+    let counter = ProviderTrafficCounter { peer_id };
+    let relay_result = crate::traffic::relay_bidirectional_with_counter(&mut tcp_stream, &mut p2p_compat, &counter)
+        .await;
 
     if let Err(e) = relay_result {
         warn!(%peer_id, "socket relay failed: {e}");
@@ -155,18 +113,13 @@ pub async fn handle_proxy_stream(
     if let Some(tc) = traffic {
         tc.dec_connections();
     }
-    if let Some(manager) = peer_traffic {
-        manager.close_connection(peer_id);
-        let snapshot = manager.snapshot(peer_id);
-        info!(
-            %peer_id,
-            bytes_sent = snapshot.bytes_sent,
-            bytes_received = snapshot.bytes_received,
-            active_connections = snapshot.active_connections,
-            total_connections = snapshot.total_connections,
-            "Updated provider peer traffic stats"
-        );
-    }
+    let peer_snapshot = snapshot(peer_id);
+    info!(
+        %peer_id,
+        upload = peer_snapshot.upload,
+        download = peer_snapshot.download,
+        "Updated provider peer traffic stats"
+    );
 
     info!(%peer_id, %target, "Proxy stream ended");
     Ok(())

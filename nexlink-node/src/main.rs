@@ -10,8 +10,8 @@ use nexlink_lib::config::default_data_dir;
 use nexlink_lib::identity::NodeIdentity;
 use nexlink_lib::network::behaviour::NexlinkBehaviourEvent;
 use nexlink_lib::network::swarm::build_client_swarm;
-use nexlink_lib::peer_traffic::PeerTrafficManager;
 use nexlink_lib::proxy::{ProxyCredentials, CREDENTIALS_PROTOCOL, CREDENTIALS_SYNC_PROTOCOL};
+use nexlink_traffic::snapshot_all as provider_traffic_snapshots;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::{signal, time};
@@ -126,7 +126,6 @@ async fn main() -> Result<()> {
 
     // If running as provider, spawn the incoming proxy stream handler with credential verification
     let allowed_credentials: Arc<DashMap<String, String>> = Arc::new(DashMap::new());
-    let peer_traffic = PeerTrafficManager::new();
     if cli.provider {
         let mut accept_control = stream_control.clone();
         let mut incoming = accept_control
@@ -134,18 +133,15 @@ async fn main() -> Result<()> {
             .expect("proxy protocol not yet registered");
 
         let creds_map = allowed_credentials.clone();
-        let traffic_stats = peer_traffic.clone();
         tokio::spawn(async move {
             use libp2p::futures::StreamExt;
             while let Some((peer_id, stream)) = incoming.next().await {
                 let map = creds_map.clone();
-                let traffic_stats = traffic_stats.clone();
                 tokio::spawn(async move {
                     if let Err(e) = nexlink_lib::proxy::provider_handler::handle_proxy_stream(
                         peer_id,
                         stream,
                         None,
-                        Some(&traffic_stats),
                         Some(&map),
                     )
                     .await
@@ -451,7 +447,7 @@ async fn main() -> Result<()> {
                 }
             }
             _ = provider_traffic_tick.tick(), if cli.provider => {
-                let snapshots = peer_traffic.snapshot_all();
+                let snapshots = provider_traffic_snapshots();
                 if snapshots.is_empty() {
                     continue;
                 }
@@ -459,11 +455,8 @@ async fn main() -> Result<()> {
                 for snapshot in snapshots.into_iter().take(10) {
                     info!(
                         peer_id = %snapshot.peer_id,
-                        bytes_sent = snapshot.bytes_sent,
-                        bytes_received = snapshot.bytes_received,
-                        active_connections = snapshot.active_connections,
-                        total_connections = snapshot.total_connections,
-                        quota_exceeded = snapshot.quota_exceeded,
+                        upload = snapshot.upload,
+                        download = snapshot.download,
                         "Provider client traffic snapshot"
                     );
                 }

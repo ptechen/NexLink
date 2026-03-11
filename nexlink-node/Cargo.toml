@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-nexlink-lib = { path = "../nexlink-lib" }
+nexlink-lib.workspace = true
 libp2p = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
@@ -14,3 +14,4 @@ clap = { workspace = true }
 libp2p-stream = { workspace = true }
 serde_json = { workspace = true }
 dashmap = { workspace = true }
+nexlink-traffic.workspace = true

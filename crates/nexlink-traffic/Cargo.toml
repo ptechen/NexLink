@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 dashmap.workspace = true
 libp2p.workspace = true
+copy-bidirectional.workspace = true
