@@ -11,7 +11,6 @@ use nexlink_lib::identity::NodeIdentity;
 use nexlink_lib::network::behaviour::NexlinkBehaviourEvent;
 use nexlink_lib::network::swarm::build_client_swarm;
 use nexlink_lib::proxy::{ProxyCredentials, CREDENTIALS_PROTOCOL, CREDENTIALS_SYNC_PROTOCOL};
-use nexlink_traffic::snapshot_all as provider_traffic_snapshots;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::{signal, time};
@@ -179,7 +178,6 @@ async fn main() -> Result<()> {
     let mut registered = false;
     let mut proxy_started = false;
     let mut discover_interval = time::interval(Duration::from_secs(30));
-    let mut provider_traffic_tick = time::interval(Duration::from_secs(60));
     let mut relay_retry_interval = time::interval(Duration::from_secs(5));
     let mut relay_dial_in_flight = true;
     let mut proxy_credentials: Option<ProxyCredentials> = None;
@@ -444,21 +442,6 @@ async fn main() -> Result<()> {
                             warn!(%relay_peer_id, addr = %relay_addr, "Failed to redial relay: {e}");
                         }
                     }
-                }
-            }
-            _ = provider_traffic_tick.tick(), if cli.provider => {
-                let snapshots = provider_traffic_snapshots();
-                if snapshots.is_empty() {
-                    continue;
-                }
-
-                for snapshot in snapshots.into_iter().take(10) {
-                    info!(
-                        peer_id = %snapshot.peer_id,
-                        upload = snapshot.upload,
-                        download = snapshot.download,
-                        "Provider client traffic snapshot"
-                    );
                 }
             }
             _ = signal::ctrl_c() => {
