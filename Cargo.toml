@@ -33,7 +33,8 @@ hkdf = "0.12"
 sha2 = "0.10"
 hex = "0.4"
 dashmap = "6"
-
+sqlx = { version = "0.8.6" }
+time = { version = "0.3", features = ["serde"] }
 
 copy-bidirectional = { path = "crates/copy-bidirectional"}
 nexlink-lib = { path = "crates/nexlink-lib"}

@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use dashmap::DashMap;
 use libp2p::futures::AsyncBufReadExt;
 use libp2p::{PeerId, Stream};
-use nexlink_traffic::{add_download, add_upload, ProviderTrafficCounter};
+use nexlink_traffic::ProviderTrafficCounter;
 use std::sync::Arc;
 use tokio::net::TcpStream;
 use tokio_util::compat::FuturesAsyncReadCompatExt;

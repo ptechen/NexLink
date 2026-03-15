@@ -6,3 +6,4 @@ pub mod node_score;
 pub mod proxy;
 pub mod sys_proxy;
 pub mod traffic;
+pub mod cache;

@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{anyhow, Result};
@@ -7,6 +5,7 @@ use clap::Parser;
 use libp2p::futures::{AsyncWriteExt, StreamExt};
 use libp2p::swarm::SwarmEvent;
 use libp2p::{ping, Multiaddr, PeerId};
+use nexlink_lib::cache::{CONNECTED_PEERS, PEER_CACHE, PROVIDER_PEERS};
 use nexlink_lib::config::default_data_dir;
 use nexlink_lib::identity::NodeIdentity;
 use nexlink_lib::network::behaviour::RelayBehaviourEvent;
@@ -14,8 +13,8 @@ use nexlink_lib::network::swarm::build_relay_swarm;
 use nexlink_lib::proxy::{
     credentials::derive_credentials, CREDENTIALS_PROTOCOL, CREDENTIALS_SYNC_PROTOCOL,
 };
+use nexlink_postgresql::nexlink::peer_user::PeerUser;
 use tokio::signal;
-use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 use tracing_subscriber::EnvFilter;
 
@@ -43,11 +42,8 @@ struct Cli {
     credentials_secret: Option<String>,
 }
 
-async fn wait_for_provider_registration(
-    provider_peers: &Arc<RwLock<HashSet<PeerId>>>,
-    requester: PeerId,
-) -> bool {
-    if provider_peers.read().await.contains(&requester) {
+async fn wait_for_provider_registration(requester: PeerId) -> bool {
+    if PROVIDER_PEERS.contains(&requester) {
         return true;
     }
 
@@ -55,7 +51,7 @@ async fn wait_for_provider_registration(
     // has processed `PeerRegistered` and updated `provider_peers`.
     for _ in 0..10 {
         tokio::time::sleep(Duration::from_millis(50)).await;
-        if provider_peers.read().await.contains(&requester) {
+        if PROVIDER_PEERS.contains(&requester) {
             return true;
         }
     }
@@ -102,10 +98,6 @@ async fn main() -> Result<()> {
 
     let mut swarm = build_relay_swarm(&identity, relay_config).await?;
 
-    // Track connected peers for credentials sync
-    let connected_peers: Arc<RwLock<HashSet<PeerId>>> = Arc::new(RwLock::new(HashSet::new()));
-    let provider_peers: Arc<RwLock<HashSet<PeerId>>> = Arc::new(RwLock::new(HashSet::new()));
-
     // Spawn credentials handler (per-peer credential issuance)
     let secret = credentials_secret.into_bytes();
     let mut credentials_control = swarm.behaviour().stream.new_control();
@@ -141,25 +133,19 @@ async fn main() -> Result<()> {
         .accept(CREDENTIALS_SYNC_PROTOCOL)
         .expect("credentials sync protocol not yet registered");
 
-    let peers_for_sync = connected_peers.clone();
-    let providers_for_sync = provider_peers.clone();
     let secret_for_sync = secret.clone();
     tokio::spawn(async move {
         while let Some((requester, mut stream)) = sync_incoming.next().await {
-            if !wait_for_provider_registration(&providers_for_sync, requester).await {
+            if !wait_for_provider_registration(requester).await {
                 warn!(%requester, "Rejected credentials sync for unregistered provider");
                 let _ = stream.close().await;
                 continue;
             }
-            let providers = providers_for_sync.read().await;
-            let peers = peers_for_sync.read().await;
-            let all_creds: Vec<nexlink_lib::proxy::ProxyCredentials> = peers
+            let all_creds: Vec<nexlink_lib::proxy::ProxyCredentials> = CONNECTED_PEERS
                 .iter()
-                .filter(|pid| !providers.contains(pid))
-                .map(|pid| derive_credentials(pid, &secret_for_sync))
+                .filter(|pid| !PROVIDER_PEERS.contains(pid))
+                .map(|pid| derive_credentials(&pid, &secret_for_sync))
                 .collect();
-            drop(peers);
-            drop(providers);
 
             let json = match serde_json::to_vec(&all_creds) {
                 Ok(j) => j,
@@ -190,12 +176,25 @@ async fn main() -> Result<()> {
                         info!("Relay listening on {}/p2p/{}", address, swarm.local_peer_id());
                     }
                     SwarmEvent::ConnectionEstablished { peer_id, .. } => {
-                        connected_peers.write().await.insert(peer_id);
+                        CONNECTED_PEERS.insert(peer_id);
+                        if !PEER_CACHE.contains_key(&peer_id) {
+                            tokio::spawn(async move {
+                                match PeerUser::insert_if_not_exists(&peer_id.to_string()).await {
+                                    Ok(id) => {
+                                        PEER_CACHE.insert(peer_id, id);
+                                        info!(%peer_id, db_id = id, "Peer cached");
+                                    }
+                                    Err(e) => {
+                                        warn!(%peer_id, "Failed to upsert peer_user: {e}");
+                                    }
+                                }
+                            });
+                        }
                         info!(%peer_id, "Peer connected");
                     }
                     SwarmEvent::ConnectionClosed { peer_id, .. } => {
-                        connected_peers.write().await.remove(&peer_id);
-                        provider_peers.write().await.remove(&peer_id);
+                        CONNECTED_PEERS.remove(&peer_id);
+                        PROVIDER_PEERS.remove(&peer_id);
                         info!(%peer_id, "Peer disconnected");
                     }
                     SwarmEvent::Behaviour(event) => {
@@ -203,16 +202,16 @@ async fn main() -> Result<()> {
                             RelayBehaviourEvent::RendezvousServer(e) => {
                                 match e {
                                     libp2p::rendezvous::server::Event::PeerRegistered { peer, .. } => {
-                                        provider_peers.write().await.insert(peer);
+                                        PROVIDER_PEERS.insert(peer);
                                         info!(%peer, "Provider registered with rendezvous");
                                     }
                                     libp2p::rendezvous::server::Event::PeerUnregistered { peer, .. } => {
-                                        provider_peers.write().await.remove(&peer);
+                                        PROVIDER_PEERS.remove(&peer);
                                         info!(%peer, "Provider unregistered from rendezvous");
                                     }
                                     libp2p::rendezvous::server::Event::RegistrationExpired(registration) => {
                                         let peer = registration.record.peer_id();
-                                        provider_peers.write().await.remove(&peer);
+                                        PROVIDER_PEERS.remove(&peer);
                                         info!(%peer, "Provider registration expired");
                                     }
                                     other => {
