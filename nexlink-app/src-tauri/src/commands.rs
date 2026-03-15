@@ -177,3 +177,28 @@ pub async fn clear_system_proxy(state: State<'_, AppState>) -> Result<(), String
         .map_err(|e| e.to_string())?;
     rx.await.map_err(|e| e.to_string())?
 }
+
+#[tauri::command]
+pub async fn get_proxy_rules(state: State<'_, AppState>) -> Result<Vec<String>, String> {
+    let (tx, rx) = oneshot::channel();
+    state
+        .cmd_tx
+        .send(AppCommand::GetProxyRules { done: tx })
+        .await
+        .map_err(|e| e.to_string())?;
+    rx.await.map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+pub async fn update_proxy_rules(
+    state: State<'_, AppState>,
+    domains: Vec<String>,
+) -> Result<(), String> {
+    let (tx, rx) = oneshot::channel();
+    state
+        .cmd_tx
+        .send(AppCommand::UpdateProxyRules { domains, done: tx })
+        .await
+        .map_err(|e| e.to_string())?;
+    rx.await.map_err(|e| e.to_string())?
+}

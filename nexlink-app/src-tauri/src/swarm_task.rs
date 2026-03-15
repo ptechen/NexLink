@@ -158,6 +158,9 @@ pub async fn run_swarm_task(
     let mut last_bytes_received: u64 = 0;
     let mut proxy_guard = nexlink_lib::sys_proxy::ProxyGuard::new();
     let mut proxy_credentials: Option<ProxyCredentials> = None;
+    let mut rules_save_tick = interval(Duration::from_secs(60));
+    rules_save_tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    rules_save_tick.tick().await;
 
     info!(%peer_id, "Swarm task started");
     let _ = app.emit("swarm-ready", peer_id.to_string());
@@ -417,6 +420,17 @@ pub async fn run_swarm_task(
                 }
             }
 
+            _ = rules_save_tick.tick() => {
+                // Periodically save proxy rules to prevent loss on crash
+                if !proxy_handles.is_empty() {
+                    let rules_path = std::path::Path::new(&data_dir_str).join("proxy_rules.json");
+                    if let Err(e) = nexlink_lib::pac::save_rules(&rules_path) {
+                        warn!("Failed to periodically save proxy rules: {e}");
+                    }
+                    shared.write().await.proxy_rule_count = nexlink_lib::pac::rule_count();
+                }
+            }
+
             _ = discover_tick.tick() => {
                 if let Some(relay) = relay_peer_id {
                     if swarm.is_connected(&relay) && proxy_credentials.is_none() {
@@ -449,6 +463,12 @@ pub async fn run_swarm_task(
             Some(cmd) = cmd_rx.recv() => {
                 match cmd {
                     AppCommand::StartProxy { unified_port, done } => {
+                        // Load proxy rules before starting
+                        let rules_path = std::path::Path::new(&data_dir_str).join("proxy_rules.json");
+                        if let Err(e) = nexlink_lib::pac::load_rules(&rules_path) {
+                            warn!("Failed to load proxy rules: {e}");
+                        }
+
                         let result = if let Some(provider_peer) = connected_provider {
                             if let Some(creds) = proxy_credentials.clone() {
                                 let control = stream_control.clone();
@@ -463,6 +483,7 @@ pub async fn run_swarm_task(
 
                                 let status = ProxyStatus { running: true, unified_port };
                                 shared.write().await.proxy_status = Some(status.clone());
+                                shared.write().await.proxy_rule_count = nexlink_lib::pac::rule_count();
                                 let _ = app.emit("proxy-status", &status);
                                 info!(unified_port, %provider_peer, "Unified proxy started");
                                 Ok(())
@@ -479,6 +500,12 @@ pub async fn run_swarm_task(
                         send_command_result(done, result);
                     }
                     AppCommand::StopProxy { done } => {
+                        // Save proxy rules before stopping
+                        let rules_path = std::path::Path::new(&data_dir_str).join("proxy_rules.json");
+                        if let Err(e) = nexlink_lib::pac::save_rules(&rules_path) {
+                            warn!("Failed to save proxy rules: {e}");
+                        }
+
                         // Auto-clear system proxy if active
                         if proxy_guard.is_active() {
                             let _ = nexlink_lib::sys_proxy::clear_system_proxy();
@@ -742,6 +769,22 @@ pub async fn run_swarm_task(
                             let _ = app.emit("system-proxy-changed", false);
                         }
                         send_command_result(done, result);
+                    }
+                    AppCommand::GetProxyRules { done } => {
+                        let rules = nexlink_lib::pac::get_all_rules();
+                        let _ = done.send(Ok(rules));
+                    }
+                    AppCommand::UpdateProxyRules { domains, done } => {
+                        nexlink_lib::pac::update_rules(domains);
+                        let rules_path = std::path::Path::new(&data_dir_str).join("proxy_rules.json");
+                        let result = match nexlink_lib::pac::save_rules(&rules_path) {
+                            Ok(()) => {
+                                shared.write().await.proxy_rule_count = nexlink_lib::pac::rule_count();
+                                Ok(())
+                            }
+                            Err(e) => Err(format!("Failed to save proxy rules: {e}")),
+                        };
+                        let _ = done.send(result);
                     }
                 }
             }

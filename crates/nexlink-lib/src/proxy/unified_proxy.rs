@@ -2,16 +2,22 @@ use anyhow::{Context, Result};
 use libp2p::futures::AsyncWriteExt as FuturesAsyncWriteExt;
 use libp2p::PeerId;
 use libp2p_stream as stream;
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tracing::{info, warn};
 
 use super::{ProxyCredentials, PROXY_PROTOCOL};
+use crate::pac::{add_proxy_rule, needs_proxy};
 use crate::traffic::TrafficCounter;
+
+/// Direct-connect timeout before falling back to P2P
+const DIRECT_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Starts a unified proxy server that handles both SOCKS5 and HTTP CONNECT protocols on a single port.
 /// No local authentication — only listens on 127.0.0.1.
+/// Implements auto-learning split routing: known-blocked domains go via P2P, others try direct first.
 pub async fn start_unified_proxy(
     port: u16,
     provider_peer: PeerId,
@@ -42,7 +48,7 @@ pub async fn start_unified_proxy(
 /// Handles a single incoming connection, detecting whether it's SOCKS5 or HTTP CONNECT
 /// and routing to the appropriate handler.
 async fn handle_unified_connection(
-    mut socket: tokio::net::TcpStream,
+    mut socket: TcpStream,
     provider_peer: PeerId,
     control: &mut stream::Control,
     traffic: &TrafficCounter,
@@ -68,9 +74,110 @@ async fn handle_unified_connection(
     }
 }
 
+/// Extract host from "host:port" target string
+fn extract_host(target: &str) -> String {
+    // Handle IPv6 like [::1]:443
+    if target.starts_with('[') {
+        if let Some(end) = target.find(']') {
+            return target[1..end].to_string();
+        }
+    }
+    // Normal host:port
+    target
+        .rsplit_once(':')
+        .map(|(host, _)| host.to_string())
+        .unwrap_or_else(|| target.to_string())
+}
+
+/// Route the connection: try direct first, fall back to P2P if needed
+async fn route_connection(
+    socket: &mut TcpStream,
+    provider_peer: PeerId,
+    control: &mut stream::Control,
+    traffic: &TrafficCounter,
+    credentials: &ProxyCredentials,
+    target: &str,
+) -> Result<()> {
+    let host = extract_host(target);
+
+    if needs_proxy(&host) {
+        info!(%target, "Routing via P2P (known proxy rule)");
+        relay_via_p2p(socket, provider_peer, control, traffic, credentials, target).await
+    } else {
+        // Try direct connection with timeout
+        match tokio::time::timeout(DIRECT_CONNECT_TIMEOUT, TcpStream::connect(target)).await {
+            Ok(Ok(tcp_stream)) => {
+                info!(%target, "Direct connection succeeded");
+                relay_direct(socket, tcp_stream, traffic).await
+            }
+            Ok(Err(e)) => {
+                info!(%target, error = %e, "Direct connection failed, falling back to P2P");
+                add_proxy_rule(&host);
+                relay_via_p2p(socket, provider_peer, control, traffic, credentials, target).await
+            }
+            Err(_) => {
+                info!(%target, "Direct connection timed out, falling back to P2P");
+                add_proxy_rule(&host);
+                relay_via_p2p(socket, provider_peer, control, traffic, credentials, target).await
+            }
+        }
+    }
+}
+
+/// Relay traffic via P2P stream to provider
+async fn relay_via_p2p(
+    socket: &mut TcpStream,
+    provider_peer: PeerId,
+    control: &mut stream::Control,
+    traffic: &TrafficCounter,
+    credentials: &ProxyCredentials,
+    target: &str,
+) -> Result<()> {
+    let mut p2p_stream = control
+        .open_stream(provider_peer, PROXY_PROTOCOL)
+        .await
+        .context("Failed to open P2P stream")?;
+
+    p2p_stream
+        .write_all(format!("AUTH {} {}\n", credentials.username, credentials.password).as_bytes())
+        .await?;
+    p2p_stream
+        .write_all(format!("{target}\n").as_bytes())
+        .await?;
+    p2p_stream.flush().await?;
+
+    traffic.inc_connections();
+    let mut p2p_compat = p2p_stream.compat();
+    if let Err(e) =
+        crate::traffic::relay_bidirectional(socket, &mut p2p_compat, Some(traffic)).await
+    {
+        warn!("P2P relay failed: {e}");
+    }
+    traffic.dec_connections();
+
+    Ok(())
+}
+
+/// Relay traffic directly between client and target (no P2P)
+async fn relay_direct(
+    socket: &mut TcpStream,
+    mut tcp_stream: TcpStream,
+    traffic: &TrafficCounter,
+) -> Result<()> {
+    traffic.inc_connections();
+    if let Err(e) =
+        crate::traffic::relay_bidirectional(socket, &mut tcp_stream, Some(traffic)).await
+    {
+        warn!("Direct relay failed: {e}");
+    }
+    traffic.dec_connections();
+
+    Ok(())
+}
+
 /// Handle SOCKS5 from the beginning of the connection, having already read the first byte (0x05)
 async fn handle_socks5_from_start(
-    mut socket: tokio::net::TcpStream,
+    mut socket: TcpStream,
     provider_peer: PeerId,
     control: &mut stream::Control,
     traffic: &TrafficCounter,
@@ -129,41 +236,18 @@ async fn handle_socks5_from_start(
 
     info!(%target, "SOCKS5 CONNECT");
 
-    let mut p2p_stream = control
-        .open_stream(provider_peer, PROXY_PROTOCOL)
-        .await
-        .context("Failed to open P2P stream")?;
-
-    p2p_stream
-        .write_all(format!("AUTH {} {}\n", credentials.username, credentials.password).as_bytes())
-        .await?;
-    p2p_stream
-        .write_all(format!("{target}\n").as_bytes())
-        .await?;
-    p2p_stream.flush().await?;
-
-    // Reply success to SOCKS5 client
-    //    [ver, rep(success), rsv, atyp(ipv4), bind_addr(0.0.0.0), bind_port(0)]
+    // Reply success to SOCKS5 client before routing
     socket
         .write_all(&[0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0])
         .await?;
 
-    // Bidirectional relay between SOCKS5 client and P2P stream
-    traffic.inc_connections();
-    let mut p2p_compat = p2p_stream.compat();
-    if let Err(e) =
-        crate::traffic::relay_bidirectional(&mut socket, &mut p2p_compat, Some(traffic)).await
-    {
-        warn!("socket relay failed: {e}");
-    }
-    traffic.dec_connections();
-
-    Ok(())
+    // Route: direct or P2P
+    route_connection(&mut socket, provider_peer, control, traffic, credentials, &target).await
 }
 
 /// Handle HTTP CONNECT from the beginning of the connection, with the first byte already read
 async fn handle_http_connect_from_start(
-    mut socket: tokio::net::TcpStream,
+    mut socket: TcpStream,
     first_byte: u8,
     provider_peer: PeerId,
     control: &mut stream::Control,
@@ -222,35 +306,11 @@ async fn handle_http_connect_from_start(
 
     info!(%target, "HTTP CONNECT");
 
-    // Open P2P stream to provider node
-    let mut p2p_stream = control
-        .open_stream(provider_peer, PROXY_PROTOCOL)
-        .await
-        .context("Failed to open P2P stream")?;
-
-    // Send AUTH line then target
-    p2p_stream
-        .write_all(format!("AUTH {} {}\n", credentials.username, credentials.password).as_bytes())
-        .await?;
-    p2p_stream
-        .write_all(format!("{target}\n").as_bytes())
-        .await?;
-    p2p_stream.flush().await?;
-
-    // Reply 200 Connection Established to client
+    // Reply 200 Connection Established to client before routing
     socket
         .write_all(b"HTTP/1.1 200 Connection Established\r\n\r\n")
         .await?;
 
-    // Bidirectional relay between HTTP client and P2P stream
-    traffic.inc_connections();
-    let mut p2p_compat = p2p_stream.compat();
-    if let Err(e) =
-        crate::traffic::relay_bidirectional(&mut socket, &mut p2p_compat, Some(traffic)).await
-    {
-        warn!("socket relay failed: {e}");
-    }
-    traffic.dec_connections();
-
-    Ok(())
+    // Route: direct or P2P
+    route_connection(&mut socket, provider_peer, control, traffic, credentials, &target).await
 }

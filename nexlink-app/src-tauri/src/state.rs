@@ -46,6 +46,7 @@ pub struct SharedState {
     pub system_proxy_enabled: bool,
     pub proxy_username: Option<String>,
     pub proxy_password: Option<String>,
+    pub proxy_rule_count: usize,
 }
 
 #[derive(Debug)]
@@ -75,6 +76,13 @@ pub enum AppCommand {
         done: oneshot::Sender<Result<(), String>>,
     },
     ClearSystemProxy {
+        done: oneshot::Sender<Result<(), String>>,
+    },
+    GetProxyRules {
+        done: oneshot::Sender<Result<Vec<String>, String>>,
+    },
+    UpdateProxyRules {
+        domains: Vec<String>,
         done: oneshot::Sender<Result<(), String>>,
     },
 }
