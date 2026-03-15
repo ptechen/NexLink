@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use dashmap::DashMap;
 use libp2p::futures::AsyncBufReadExt;
 use libp2p::{PeerId, Stream};
-use nexlink_traffic::{add_download, add_upload, snapshot, ProviderTrafficCounter};
+use nexlink_traffic::{add_download, add_upload, ProviderTrafficCounter};
 use std::sync::Arc;
 use tokio::net::TcpStream;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
@@ -113,13 +113,6 @@ pub async fn handle_proxy_stream(
     if let Some(tc) = traffic {
         tc.dec_connections();
     }
-    let peer_snapshot = snapshot(peer_id);
-    info!(
-        %peer_id,
-        upload = peer_snapshot.upload,
-        download = peer_snapshot.download,
-        "Updated provider peer traffic stats"
-    );
 
     info!(%peer_id, %target, "Proxy stream ended");
     Ok(())

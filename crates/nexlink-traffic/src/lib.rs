@@ -44,24 +44,3 @@ pub fn add_download(peer_id: PeerId, size: u64) {
     traffic.download.fetch_add(size, Ordering::Relaxed);
 }
 
-pub fn snapshot(peer_id: PeerId) -> TrafficSnapshot {
-    let traffic = NEXLINK_TRAFFIC.entry(peer_id).or_default();
-    TrafficSnapshot {
-        peer_id,
-        upload: traffic.upload.load(Ordering::Relaxed),
-        download: traffic.download.load(Ordering::Relaxed),
-    }
-}
-
-pub fn snapshot_all() -> Vec<TrafficSnapshot> {
-    let mut snapshots: Vec<_> = NEXLINK_TRAFFIC
-        .iter()
-        .map(|entry| TrafficSnapshot {
-            peer_id: *entry.key(),
-            upload: entry.upload.load(Ordering::Relaxed),
-            download: entry.download.load(Ordering::Relaxed),
-        })
-        .collect();
-    snapshots.sort_by_key(|snapshot| std::cmp::Reverse(snapshot.upload + snapshot.download));
-    snapshots
-}
