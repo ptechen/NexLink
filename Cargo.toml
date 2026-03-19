@@ -1,6 +1,6 @@
 [workspace]
-members = ['crates/*', "nexlink-app/src-tauri", "nexlink-relay", "nexlink-node"]
-exclude = ["nexlink-app"]
+members = ['crates/*', "nexlink-app/src-tauri", "nexlink-relay", "nexlink-node", "nexlink-traffic-sync"]
+exclude = ["nexlink-app", "crates/nexlink-traffic-sync"]
 resolver = "2"
 
 [workspace.dependencies]
