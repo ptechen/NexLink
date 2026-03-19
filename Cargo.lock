@@ -3913,8 +3913,10 @@ dependencies = [
  "libp2p",
  "libp2p-stream",
  "nexlink-lib",
+ "nexlink-taos",
  "nexlink-traffic",
  "serde_json",
+ "time",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -3949,6 +3951,7 @@ name = "nexlink-taos"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "nexlink-traffic",
  "serde",
  "taos",
  "time",

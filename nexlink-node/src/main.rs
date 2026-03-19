@@ -11,6 +11,7 @@ use nexlink_lib::identity::NodeIdentity;
 use nexlink_lib::network::behaviour::NexlinkBehaviourEvent;
 use nexlink_lib::network::swarm::build_client_swarm;
 use nexlink_lib::proxy::{ProxyCredentials, CREDENTIALS_PROTOCOL, CREDENTIALS_SYNC_PROTOCOL};
+use nexlink_taos::{TaosClient, TaosConfig, TrafficWriteRepository};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::{signal, time};
@@ -179,8 +180,10 @@ async fn main() -> Result<()> {
     let mut proxy_started = false;
     let mut discover_interval = time::interval(Duration::from_secs(30));
     let mut relay_retry_interval = time::interval(Duration::from_secs(5));
+    let mut traffic_flush_interval = time::interval(Duration::from_secs(10));
     let mut relay_dial_in_flight = true;
     let mut proxy_credentials: Option<ProxyCredentials> = None;
+    let taos_repo = TrafficWriteRepository::new(TaosClient::new(TaosConfig::from_env()));
 
     loop {
         tokio::select! {
@@ -440,6 +443,19 @@ async fn main() -> Result<()> {
                         }
                         Err(e) => {
                             warn!(%relay_peer_id, addr = %relay_addr, "Failed to redial relay: {e}");
+                        }
+                    }
+                }
+            }
+            _ = traffic_flush_interval.tick() => {
+                let snapshots = nexlink_traffic::snapshot_all();
+                if !snapshots.is_empty() {
+                    match taos_repo.flush_snapshots(snapshots, ::time::OffsetDateTime::now_utc()).await {
+                        Ok(count) => {
+                            debug!(count, "Flushed traffic snapshots to taos");
+                        }
+                        Err(e) => {
+                            warn!("Failed to flush traffic snapshots to taos: {e:#}");
                         }
                     }
                 }

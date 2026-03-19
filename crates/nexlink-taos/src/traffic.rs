@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use nexlink_traffic::TrafficSnapshot;
 use serde::{Deserialize, Serialize};
 use taos::AsyncQueryable;
 use time::{format_description::well_known::Rfc3339, OffsetDateTime};
@@ -15,11 +16,27 @@ pub struct TrafficSample {
     pub download_bytes: u64,
     pub active_connections: u32,
     pub source: String,
+    pub source_ip: Option<String>,
+    pub source_transport: Option<String>,
 }
 
 impl TrafficSample {
     pub fn table_name(&self) -> String {
         sanitize_identifier(&format!("peer_{}", self.peer_id))
+    }
+
+    pub fn from_snapshot(snapshot: TrafficSnapshot, ts: OffsetDateTime) -> Self {
+        Self {
+            ts,
+            peer_id: snapshot.peer_id.to_string(),
+            role: snapshot.role.unwrap_or_else(|| "unknown".to_string()),
+            upload_bytes: snapshot.upload,
+            download_bytes: snapshot.download,
+            active_connections: snapshot.active_connections,
+            source: snapshot.source.unwrap_or_else(|| "unknown".to_string()),
+            source_ip: snapshot.source_ip,
+            source_transport: snapshot.source_transport,
+        }
     }
 }
 
@@ -38,6 +55,19 @@ impl TrafficWriteRepository {
         &self.client
     }
 
+    pub async fn flush_snapshots<I>(&self, snapshots: I, ts: OffsetDateTime) -> Result<usize>
+    where
+        I: IntoIterator<Item = TrafficSnapshot>,
+    {
+        let mut written = 0usize;
+        for snapshot in snapshots {
+            let sample = TrafficSample::from_snapshot(snapshot, ts);
+            self.write_sample(&sample).await?;
+            written += 1;
+        }
+        Ok(written)
+    }
+
     /// Writes one traffic sample into a dedicated child table for the peer.
     ///
     /// The table is created on demand from the configured stable.
@@ -53,9 +83,11 @@ impl TrafficWriteRepository {
         let source = escape_string(&sample.source);
         let peer_id = escape_string(&sample.peer_id);
         let role = escape_string(&sample.role);
+        let source_ip = escape_string(sample.source_ip.as_deref().unwrap_or(""));
+        let source_transport = escape_string(sample.source_transport.as_deref().unwrap_or(""));
 
         let sql = format!(
-            "INSERT INTO `{}.{}` USING `{}.{}` TAGS ('{}', '{}') VALUES ('{}', {}, {}, {}, '{}')",
+            "INSERT INTO `{}.{}` USING `{}.{}` TAGS ('{}', '{}') VALUES ('{}', {}, {}, {}, '{}', '{}', '{}')",
             cfg.database,
             table_name,
             cfg.database,
@@ -67,6 +99,8 @@ impl TrafficWriteRepository {
             sample.download_bytes,
             sample.active_connections,
             source,
+            source_ip,
+            source_transport,
         );
 
         taos.exec(sql)

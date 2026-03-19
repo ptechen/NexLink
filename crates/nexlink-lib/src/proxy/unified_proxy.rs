@@ -8,6 +8,8 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio_util::compat::FuturesAsyncReadCompatExt;
 use tracing::{info, warn};
 
+use nexlink_traffic::{update_context, TrafficContextUpdate};
+
 use super::{ProxyCredentials, PROXY_PROTOCOL};
 use crate::pac::{add_proxy_rule, needs_proxy};
 use crate::traffic::TrafficCounter;
@@ -37,7 +39,7 @@ pub async fn start_unified_proxy(
 
         tokio::spawn(async move {
             if let Err(e) =
-                handle_unified_connection(socket, peer, &mut ctl, &counter, &creds).await
+                handle_unified_connection(socket, addr, peer, &mut ctl, &counter, &creds).await
             {
                 warn!(%addr, "Unified proxy error: {e:#}");
             }
@@ -49,11 +51,22 @@ pub async fn start_unified_proxy(
 /// and routing to the appropriate handler.
 async fn handle_unified_connection(
     mut socket: TcpStream,
+    client_addr: std::net::SocketAddr,
     provider_peer: PeerId,
     control: &mut stream::Control,
     traffic: &TrafficCounter,
     credentials: &ProxyCredentials,
 ) -> Result<()> {
+    let source_ip = client_addr.ip().to_string();
+    update_context(
+        provider_peer,
+        TrafficContextUpdate {
+            role: Some("client"),
+            source: Some("nexlink-node"),
+            source_ip: Some(source_ip.as_str()),
+            source_transport: Some("tcp"),
+        },
+    );
     let mut first_byte_buffer = [0u8; 1];
     socket.read_exact(&mut first_byte_buffer).await?;
 

@@ -43,7 +43,9 @@ impl TaosClient {
                 `upload_bytes` BIGINT,
                 `download_bytes` BIGINT,
                 `active_connections` INT,
-                `source` BINARY(32)
+                `source` BINARY(32),
+                `source_ip` BINARY(64),
+                `source_transport` BINARY(32)
             ) TAGS (
                 `peer_id` BINARY(96),
                 `role` BINARY(16)

@@ -340,8 +340,8 @@ npm run build:tailwind
 
 - `TaosConfig`：读取 DSN / database / stable 配置
 - `TaosClient`：建立连接并确保 traffic schema 存在
-- `TrafficWriteRepository`：预留流量样本写入接口
-- `TrafficSample`：统一流量写入模型
+- `TrafficWriteRepository`：预留流量样本写入接口与批量 flush helper
+- `TrafficSample`：统一流量写入模型（含 `source_ip` / `source_transport`）
 
 默认读取以下环境变量：
 
