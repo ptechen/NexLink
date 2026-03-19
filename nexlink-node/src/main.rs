@@ -12,6 +12,7 @@ use nexlink_lib::network::behaviour::NexlinkBehaviourEvent;
 use nexlink_lib::network::swarm::build_client_swarm;
 use nexlink_lib::proxy::{ProxyCredentials, CREDENTIALS_PROTOCOL, CREDENTIALS_SYNC_PROTOCOL};
 use nexlink_taos::{TaosClient, TaosConfig, TrafficWriteRepository};
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::{signal, time};
@@ -183,6 +184,7 @@ async fn main() -> Result<()> {
     let mut traffic_flush_interval = time::interval(Duration::from_secs(10));
     let mut relay_dial_in_flight = true;
     let mut proxy_credentials: Option<ProxyCredentials> = None;
+    let mut last_flushed_totals: HashMap<libp2p::PeerId, (u64, u64)> = HashMap::new();
     let taos_repo = TrafficWriteRepository::new(TaosClient::new(TaosConfig::from_env()));
 
     loop {
@@ -450,12 +452,38 @@ async fn main() -> Result<()> {
             _ = traffic_flush_interval.tick() => {
                 let snapshots = nexlink_traffic::snapshot_all();
                 if !snapshots.is_empty() {
-                    match taos_repo.flush_snapshots(snapshots, ::time::OffsetDateTime::now_utc()).await {
-                        Ok(count) => {
-                            debug!(count, "Flushed traffic snapshots to taos");
-                        }
-                        Err(e) => {
-                            warn!("Failed to flush traffic snapshots to taos: {e:#}");
+                    let delta_snapshots: Vec<_> = snapshots
+                        .into_iter()
+                        .filter_map(|mut snapshot| {
+                            let previous = last_flushed_totals
+                                .get(&snapshot.peer_id)
+                                .copied()
+                                .unwrap_or((0, 0));
+
+                            let delta_upload = snapshot.upload.saturating_sub(previous.0);
+                            let delta_download = snapshot.download.saturating_sub(previous.1);
+
+                            last_flushed_totals
+                                .insert(snapshot.peer_id, (snapshot.upload, snapshot.download));
+
+                            if delta_upload == 0 && delta_download == 0 && snapshot.active_connections == 0 {
+                                return None;
+                            }
+
+                            snapshot.upload = delta_upload;
+                            snapshot.download = delta_download;
+                            Some(snapshot)
+                        })
+                        .collect();
+
+                    if !delta_snapshots.is_empty() {
+                        match taos_repo.flush_snapshots(delta_snapshots, ::time::OffsetDateTime::now_utc()).await {
+                            Ok(count) => {
+                                debug!(count, "Flushed traffic delta snapshots to taos");
+                            }
+                            Err(e) => {
+                                warn!("Failed to flush traffic delta snapshots to taos: {e:#}");
+                            }
                         }
                     }
                 }
