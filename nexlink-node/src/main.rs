@@ -458,40 +458,62 @@ async fn main() -> Result<()> {
             }
             _ = traffic_flush_interval.tick() => {
                 let snapshots = nexlink_traffic::snapshot_all();
-                if !snapshots.is_empty() {
-                    let delta_snapshots: Vec<_> = snapshots
-                        .into_iter()
-                        .filter_map(|mut snapshot| {
-                            let previous = last_flushed_totals
-                                .get(&snapshot.peer_id)
-                                .copied()
-                                .unwrap_or((0, 0));
+                let snapshot_count = snapshots.len();
+                if snapshot_count == 0 {
+                    debug!("Traffic flush tick: no snapshots collected");
+                    continue;
+                }
 
-                            let delta_upload = snapshot.upload.saturating_sub(previous.0);
-                            let delta_download = snapshot.download.saturating_sub(previous.1);
+                let delta_snapshots: Vec<_> = snapshots
+                    .into_iter()
+                    .filter_map(|mut snapshot| {
+                        let previous = last_flushed_totals
+                            .get(&snapshot.peer_id)
+                            .copied()
+                            .unwrap_or((0, 0));
 
-                            last_flushed_totals
-                                .insert(snapshot.peer_id, (snapshot.upload, snapshot.download));
+                        let delta_upload = snapshot.upload.saturating_sub(previous.0);
+                        let delta_download = snapshot.download.saturating_sub(previous.1);
 
-                            if delta_upload == 0 && delta_download == 0 && snapshot.active_connections == 0 {
-                                return None;
-                            }
+                        last_flushed_totals
+                            .insert(snapshot.peer_id, (snapshot.upload, snapshot.download));
 
-                            snapshot.upload = delta_upload;
-                            snapshot.download = delta_download;
-                            Some(snapshot)
-                        })
-                        .collect();
-
-                    if !delta_snapshots.is_empty() {
-                        match taos_repo.flush_snapshots(delta_snapshots, ::time::OffsetDateTime::now_utc()).await {
-                            Ok(count) => {
-                                debug!(count, "Flushed traffic delta snapshots to taos");
-                            }
-                            Err(e) => {
-                                warn!("Failed to flush traffic delta snapshots to taos: {e:#}");
-                            }
+                        if delta_upload == 0 && delta_download == 0 && snapshot.active_connections == 0 {
+                            return None;
                         }
+
+                        debug!(
+                            peer_id = %snapshot.peer_id,
+                            total_upload = snapshot.upload,
+                            total_download = snapshot.download,
+                            delta_upload,
+                            delta_download,
+                            active_connections = snapshot.active_connections,
+                            role = ?snapshot.role,
+                            source = ?snapshot.source,
+                            source_ip = ?snapshot.source_ip,
+                            source_transport = ?snapshot.source_transport,
+                            "Prepared traffic delta snapshot"
+                        );
+
+                        snapshot.upload = delta_upload;
+                        snapshot.download = delta_download;
+                        Some(snapshot)
+                    })
+                    .collect();
+
+                let delta_count = delta_snapshots.len();
+                if delta_count == 0 {
+                    debug!(snapshot_count, "Traffic flush tick: all snapshots filtered out after delta calculation");
+                    continue;
+                }
+
+                match taos_repo.flush_snapshots(delta_snapshots, ::time::OffsetDateTime::now_utc()).await {
+                    Ok(count) => {
+                        info!(snapshot_count, delta_count, flushed = count, "Flushed traffic delta snapshots to taos");
+                    }
+                    Err(e) => {
+                        warn!(snapshot_count, delta_count, "Failed to flush traffic delta snapshots to taos: {e:#}");
                     }
                 }
             }
