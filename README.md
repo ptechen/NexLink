@@ -5,6 +5,7 @@ NexLink 是一个基于 **Rust + libp2p + Tauri + Leptos** 的 P2P 代理/中继
 - **nexlink-relay**：中继 / rendezvous 服务端
 - **nexlink-node**：节点程序，可作为客户端或 provider
 - **nexlink-app**：桌面 GUI（Tauri + Leptos）
+- **nexlink-taos**：TDengine/taos 接入层，为后续流量数据写入做准备
 
 这份 README 的目标是让你能快速完成下面几件事：
 
@@ -332,6 +333,25 @@ npm run build:tailwind
 ```
 
 ---
+
+## TDengine / taos 支持（进行中）
+
+当前 `crates/nexlink-taos` 已提供第一版基础设施：
+
+- `TaosConfig`：读取 DSN / database / stable 配置
+- `TaosClient`：建立连接并确保 traffic schema 存在
+- `TrafficWriteRepository`：预留流量样本写入接口
+- `TrafficSample`：统一流量写入模型
+
+默认读取以下环境变量：
+
+```bash
+export NEXLINK_TAOS_DSN="taos+ws://localhost:6041"
+export NEXLINK_TAOS_DATABASE="nexlink"
+export NEXLINK_TAOS_STABLE="traffic_metrics"
+```
+
+这部分目前是**为未来流量落库打地基**，还没有把 runtime 中的真实流量采集自动接入写库链路。
 
 ## 后续可以继续补的内容
 
