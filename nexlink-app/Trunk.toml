@@ -1,0 +1,19 @@
+[build]
+target = "index.html"
+dist = "dist"
+
+[watch]
+ignore = ["./src-tauri"]
+
+[serve]
+port = 1420
+open = false
+ws_protocol = "ws"
+
+#[[hooks]]
+#stage = "pre_build"
+#command = "sh"
+#command_args = ["-c", "cd /Users/taochen/RustroverProjects/nexlink/nexlink-app && npm run build:tailwind"]
+
+#[wasm_opt]
+#enable = false

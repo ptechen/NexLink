@@ -1,0 +1,41 @@
+[workspace]
+members = ['crates/*', "nexlink-app/src-tauri", "nexlink-relay", "nexlink-node"]
+exclude = ["nexlink-app"]
+resolver = "2"
+
+[workspace.dependencies]
+tokio = { version = "1.49", features = ["rt-multi-thread", "macros", "time", "net", "io-util", "signal"] }
+libp2p = { version = "0.56", features = [
+    "quic",
+    "noise",
+    "yamux",
+    "rendezvous",
+    "relay",
+    "autonat",
+    "identify",
+    "ping",
+    "ed25519",
+    "macros",
+    "tokio",
+    "tcp",
+] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1"
+dirs = "6"
+clap = { version = "4", features = ["derive"] }
+libp2p-stream = "0.4.0-alpha"
+tokio-util = { version = "0.7", features = ["compat"] }
+fast-socks5 = "0.10"
+hkdf = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+dashmap = "6"
+sqlx = { version = "0.8.6" }
+time = { version = "0.3", features = ["serde"] }
+
+copy-bidirectional = { path = "crates/copy-bidirectional"}
+nexlink-lib = { path = "crates/nexlink-lib"}
+nexlink-traffic = { path = "crates/nexlink-traffic"}

@@ -1,0 +1,14 @@
+{
+  "devDependencies": {
+    "tailwindcss": "^4.2.1"
+  },
+  "scripts": {
+    "build:tailwind": "npx tailwindcss -i ./tailwind.css -o ./styles/output.css",
+    "watch:tailwind": "npx tailwindcss -i ./tailwind.css -o ./styles/output.css --watch"
+  },
+  "dependencies": {
+    "@types/sharp": "^0.31.1",
+    "icojs": "^0.20.1",
+    "sharp": "^0.34.5"
+  }
+}
