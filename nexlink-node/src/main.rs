@@ -118,6 +118,13 @@ async fn main() -> Result<()> {
     let identity_path = data_dir.join("identity.json");
     let identity = NodeIdentity::load_or_generate_with_recovery(&identity_path)?;
 
+    let rules_path = data_dir.join("proxy_rules.json");
+    if let Err(e) = nexlink_lib::pac::load_rules(&rules_path) {
+        warn!(path = %rules_path.display(), "Failed to load proxy rules: {e:#}");
+    } else {
+        info!(path = %rules_path.display(), count = nexlink_lib::pac::rule_count(), "Loaded proxy rules");
+    }
+
     info!(peer_id = %identity.peer_id(), "Starting nexlink node");
 
     let mut swarm = build_client_swarm(&identity).await?;

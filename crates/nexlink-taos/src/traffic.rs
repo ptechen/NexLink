@@ -75,6 +75,9 @@ impl TrafficWriteRepository {
         self.client.ensure_traffic_schema().await?;
         let taos = self.client.connect().await?;
         let cfg = self.client.config();
+        taos.exec(format!("USE `{}`", cfg.database))
+            .await
+            .context("failed to switch taos database before insert")?;
         let table_name = sample.table_name();
         let timestamp = sample
             .ts
@@ -87,10 +90,8 @@ impl TrafficWriteRepository {
         let source_transport = escape_string(sample.source_transport.as_deref().unwrap_or(""));
 
         let sql = format!(
-            "INSERT INTO `{}.{}` USING `{}.{}` TAGS ('{}', '{}') VALUES ('{}', {}, {}, {}, '{}', '{}', '{}')",
-            cfg.database,
+            "INSERT INTO `{}` USING `{}` TAGS ('{}', '{}') VALUES ('{}', {}, {}, {}, '{}', '{}', '{}')",
             table_name,
-            cfg.database,
             cfg.stable,
             peer_id,
             role,

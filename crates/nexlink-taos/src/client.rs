@@ -37,8 +37,12 @@ impl TaosClient {
         .await
         .context("failed to create taos database")?;
 
+        taos.exec(format!("USE `{}`", self.config.database))
+            .await
+            .context("failed to switch taos database")?;
+
         taos.exec(format!(
-            "CREATE STABLE IF NOT EXISTS `{}.{}` (
+            "CREATE STABLE IF NOT EXISTS `{}` (
                 `ts` TIMESTAMP,
                 `upload_bytes` BIGINT,
                 `download_bytes` BIGINT,
@@ -50,7 +54,7 @@ impl TaosClient {
                 `peer_id` BINARY(96),
                 `role` BINARY(16)
             )",
-            self.config.database, self.config.stable
+            self.config.stable
         ))
         .await
         .context("failed to create taos traffic stable")?;
