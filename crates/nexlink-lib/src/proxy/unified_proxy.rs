@@ -11,7 +11,7 @@ use tracing::{info, warn};
 use nexlink_traffic::{update_context, TrafficContextUpdate};
 
 use super::{ProxyCredentials, PROXY_PROTOCOL};
-use crate::pac::{add_proxy_rule, needs_proxy};
+use crate::pac::{add_proxy_rule, matching_proxy_rule};
 use crate::traffic::TrafficCounter;
 
 /// Direct-connect timeout before falling back to P2P
@@ -112,27 +112,78 @@ async fn route_connection(
     target: &str,
 ) -> Result<()> {
     let host = extract_host(target);
+    let connect_timeout_ms = DIRECT_CONNECT_TIMEOUT.as_millis() as u64;
 
-    if needs_proxy(&host) {
-        info!(%target, "Routing via P2P (known proxy rule)");
-        relay_via_p2p(socket, provider_peer, control, traffic, credentials, target).await
-    } else {
-        // Try direct connection with timeout
-        match tokio::time::timeout(DIRECT_CONNECT_TIMEOUT, TcpStream::connect(target)).await {
-            Ok(Ok(tcp_stream)) => {
-                info!(%target, "Direct connection succeeded");
-                relay_direct(socket, tcp_stream, traffic).await
-            }
-            Ok(Err(e)) => {
-                info!(%target, error = %e, "Direct connection failed, falling back to P2P");
-                add_proxy_rule(&host);
-                relay_via_p2p(socket, provider_peer, control, traffic, credentials, target).await
-            }
-            Err(_) => {
-                info!(%target, "Direct connection timed out, falling back to P2P");
-                add_proxy_rule(&host);
-                relay_via_p2p(socket, provider_peer, control, traffic, credentials, target).await
-            }
+    info!(
+        %target,
+        %host,
+        provider_peer = %provider_peer,
+        connect_timeout_ms,
+        "Unified proxy evaluating route"
+    );
+
+    if let Some(rule) = matching_proxy_rule(&host) {
+        info!(
+            %target,
+            %host,
+            matched_rule = %rule,
+            provider_peer = %provider_peer,
+            decision = "provider",
+            reason = "matched_proxy_rule",
+            "Unified proxy route decision"
+        );
+        return relay_via_p2p(socket, provider_peer, control, traffic, credentials, target).await;
+    }
+
+    info!(
+        %target,
+        %host,
+        provider_peer = %provider_peer,
+        decision = "direct_probe",
+        reason = "no_proxy_rule_match",
+        "Unified proxy route decision"
+    );
+
+    // Try direct connection with timeout
+    match tokio::time::timeout(DIRECT_CONNECT_TIMEOUT, TcpStream::connect(target)).await {
+        Ok(Ok(tcp_stream)) => {
+            info!(
+                %target,
+                %host,
+                provider_peer = %provider_peer,
+                decision = "direct",
+                reason = "direct_connect_succeeded",
+                "Unified proxy route final"
+            );
+            relay_direct(socket, tcp_stream, traffic).await
+        }
+        Ok(Err(e)) => {
+            add_proxy_rule(&host);
+            info!(
+                %target,
+                %host,
+                provider_peer = %provider_peer,
+                error = %e,
+                learned_rule = %host,
+                decision = "provider",
+                reason = "direct_connect_failed_fallback",
+                "Unified proxy route final"
+            );
+            relay_via_p2p(socket, provider_peer, control, traffic, credentials, target).await
+        }
+        Err(_) => {
+            add_proxy_rule(&host);
+            info!(
+                %target,
+                %host,
+                provider_peer = %provider_peer,
+                timeout_ms = connect_timeout_ms,
+                learned_rule = %host,
+                decision = "provider",
+                reason = "direct_connect_timeout_fallback",
+                "Unified proxy route final"
+            );
+            relay_via_p2p(socket, provider_peer, control, traffic, credentials, target).await
         }
     }
 }
@@ -255,7 +306,15 @@ async fn handle_socks5_from_start(
         .await?;
 
     // Route: direct or P2P
-    route_connection(&mut socket, provider_peer, control, traffic, credentials, &target).await
+    route_connection(
+        &mut socket,
+        provider_peer,
+        control,
+        traffic,
+        credentials,
+        &target,
+    )
+    .await
 }
 
 /// Handle HTTP CONNECT from the beginning of the connection, with the first byte already read
@@ -325,5 +384,13 @@ async fn handle_http_connect_from_start(
         .await?;
 
     // Route: direct or P2P
-    route_connection(&mut socket, provider_peer, control, traffic, credentials, &target).await
+    route_connection(
+        &mut socket,
+        provider_peer,
+        control,
+        traffic,
+        credentials,
+        &target,
+    )
+    .await
 }

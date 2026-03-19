@@ -2,7 +2,8 @@ use anyhow::{Context, Result};
 use nexlink_traffic::TrafficSnapshot;
 use serde::{Deserialize, Serialize};
 use taos::AsyncQueryable;
-use time::{format_description::well_known::Rfc3339, OffsetDateTime};
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+use tracing::info;
 
 use crate::client::TaosClient;
 
@@ -104,9 +105,30 @@ impl TrafficWriteRepository {
             source_transport,
         );
 
+        info!(
+            table = %table_name,
+            stable = %cfg.stable,
+            peer_id = %sample.peer_id,
+            role = %sample.role,
+            upload_bytes = sample.upload_bytes,
+            download_bytes = sample.download_bytes,
+            active_connections = sample.active_connections,
+            source = %sample.source,
+            source_ip = sample.source_ip.as_deref().unwrap_or(""),
+            source_transport = sample.source_transport.as_deref().unwrap_or(""),
+            "Writing traffic sample to taos"
+        );
+
         taos.exec(sql)
             .await
             .context("failed to write taos traffic sample")?;
+
+        info!(
+            table = %table_name,
+            peer_id = %sample.peer_id,
+            role = %sample.role,
+            "Traffic sample written to taos"
+        );
 
         Ok(())
     }
@@ -148,6 +170,8 @@ mod tests {
             download_bytes: 2,
             active_connections: 3,
             source: "relay".to_string(),
+            source_ip: None,
+            source_transport: None,
         };
 
         assert_eq!(sample.table_name(), "peer_12D3_Koo_Wild");

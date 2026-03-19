@@ -77,15 +77,17 @@ pub fn load_rules(path: &Path) -> Result<()> {
             PROXY_RULES.insert(domain.to_string());
         }
 
-        tracing::info!(count = SEED_DOMAINS.len(), "Initialized proxy rules with seed domains");
+        tracing::info!(
+            count = SEED_DOMAINS.len(),
+            "Initialized proxy rules with seed domains"
+        );
         return Ok(());
     }
 
-    let content = std::fs::read_to_string(path)
-        .context("Failed to read proxy rules file")?;
+    let content = std::fs::read_to_string(path).context("Failed to read proxy rules file")?;
 
-    let rules: ProxyRulesFile = serde_json::from_str(&content)
-        .context("Failed to parse proxy rules file")?;
+    let rules: ProxyRulesFile =
+        serde_json::from_str(&content).context("Failed to parse proxy rules file")?;
 
     PROXY_RULES.clear();
     for domain in rules.domains {
@@ -115,20 +117,25 @@ pub fn save_rules(path: &Path) -> Result<()> {
 /// 判断 host 是否需要走代理（支持子域名匹配）
 /// 例如：rules 中有 google.com 则 www.google.com 也匹配
 pub fn needs_proxy(host: &str) -> bool {
+    matching_proxy_rule(host).is_some()
+}
+
+/// 返回命中的代理规则（精确匹配或父域名规则）
+pub fn matching_proxy_rule(host: &str) -> Option<String> {
     // 直接匹配
     if PROXY_RULES.contains(host) {
-        return true;
+        return Some(host.to_string());
     }
 
     // 子域名匹配：检查 host 是否以 ".domain" 结尾
     for rule in PROXY_RULES.iter() {
         let domain = rule.key();
         if host.ends_with(&format!(".{}", domain)) {
-            return true;
+            return Some(domain.to_string());
         }
     }
 
-    false
+    None
 }
 
 /// 记录一个域名需要走代理
