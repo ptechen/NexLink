@@ -1,6 +1,7 @@
 use nexlink_core::{
-    inbound_connector_event, inbound_event, outbound_event, InboundConnectorMessage,
-    InboundMessageContext, MessageInboundPayload, MessageOutboundPayload, OutboundMessageContext,
+    inbound_connector_event, inbound_event, outbound_connector_event, outbound_event,
+    InboundConnectorMessage, InboundMessageContext, MessageInboundPayload, MessageOutboundPayload,
+    OutboundConnectorMessage, OutboundMessageContext,
 };
 use time::OffsetDateTime;
 
@@ -65,6 +66,31 @@ pub fn outbound_message_event(
         session_key: session_key.into(),
         channel: channel.into(),
         payload,
+        created_at: OffsetDateTime::now_utc(),
+    })
+}
+
+pub fn connector_outbound_event(
+    event_id: impl Into<String>,
+    source_peer: Option<String>,
+    target_peer: Option<String>,
+    session_key: impl Into<String>,
+    channel: impl Into<String>,
+    reply_to: Option<String>,
+    text: Option<String>,
+    attachments: Vec<nexlink_core::Attachment>,
+    metadata: serde_json::Value,
+) -> nexlink_core::EventEnvelope {
+    outbound_connector_event(OutboundConnectorMessage {
+        event_id: event_id.into(),
+        session_key: session_key.into(),
+        channel: channel.into(),
+        source_peer,
+        target_peer,
+        reply_to,
+        text,
+        attachments,
+        metadata,
         created_at: OffsetDateTime::now_utc(),
     })
 }

@@ -32,6 +32,20 @@ pub struct InboundMessageContext {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OutboundConnectorMessage {
+    pub event_id: String,
+    pub session_key: String,
+    pub channel: String,
+    pub source_peer: Option<String>,
+    pub target_peer: Option<String>,
+    pub reply_to: Option<String>,
+    pub text: Option<String>,
+    pub attachments: Vec<Attachment>,
+    pub metadata: serde_json::Value,
+    pub created_at: time::OffsetDateTime,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OutboundMessageContext {
     pub event_id: String,
     pub source_peer: Option<String>,
@@ -84,4 +98,21 @@ pub fn outbound_event(ctx: OutboundMessageContext) -> EventEnvelope {
         created_at: ctx.created_at,
         payload: EventPayload::MessageOutbound(ctx.payload),
     }
+}
+
+pub fn outbound_connector_event(msg: OutboundConnectorMessage) -> EventEnvelope {
+    outbound_event(OutboundMessageContext {
+        event_id: msg.event_id,
+        source_peer: msg.source_peer,
+        target_peer: msg.target_peer,
+        session_key: msg.session_key,
+        channel: msg.channel,
+        payload: MessageOutboundPayload {
+            reply_to: msg.reply_to,
+            text: msg.text,
+            attachments: msg.attachments,
+            metadata: msg.metadata,
+        },
+        created_at: msg.created_at,
+    })
 }
