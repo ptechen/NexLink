@@ -1,4 +1,7 @@
-use nexlink_core::{Attachment, EventEnvelope, MessageInboundPayload, MessageOutboundPayload};
+use nexlink_core::{
+    Attachment, EventEnvelope, MessageInboundPayload, MessageOutboundPayload,
+    OutboundConnectorMessage,
+};
 
 use crate::message_model::{
     connector_inbound_event, connector_outbound_event, inbound_message_event,
@@ -165,5 +168,28 @@ impl ConnectorEnvelopeBuilder {
             attachments,
             metadata,
         )
+    }
+
+    pub fn outbound_connector_message(
+        &self,
+        event_id: impl Into<String>,
+        session_key: impl Into<String>,
+        reply_to: Option<String>,
+        text: Option<String>,
+        attachments: Vec<Attachment>,
+        metadata: serde_json::Value,
+    ) -> OutboundConnectorMessage {
+        OutboundConnectorMessage {
+            event_id: event_id.into(),
+            session_key: session_key.into(),
+            channel: self.channel.clone(),
+            source_peer: self.source_peer.clone(),
+            target_peer: self.target_peer.clone(),
+            reply_to,
+            text,
+            attachments,
+            metadata,
+            created_at: time::OffsetDateTime::now_utc(),
+        }
     }
 }
