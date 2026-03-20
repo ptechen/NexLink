@@ -1,0 +1,16 @@
+use async_trait::async_trait;
+
+use crate::MessageOutboundPayload;
+
+#[async_trait]
+pub trait Connector: Send + Sync {
+    fn channel(&self) -> &'static str;
+
+    async fn start(&self) -> anyhow::Result<()>;
+
+    async fn send_message(
+        &self,
+        session_key: &str,
+        payload: MessageOutboundPayload,
+    ) -> anyhow::Result<()>;
+}
