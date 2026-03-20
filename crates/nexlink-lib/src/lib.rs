@@ -2,6 +2,7 @@ pub mod cache;
 pub mod config;
 pub mod connector_adapter;
 pub mod connector_envelope;
+pub mod connector_examples;
 pub mod identity;
 pub mod message_model;
 pub mod network;
