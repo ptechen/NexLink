@@ -6,6 +6,7 @@ use crate::connector_adapter::{
     ConnectorInboundInput, ConnectorOutboundInput,
 };
 use crate::connector_envelope::ConnectorEnvelopeBuilder;
+use crate::platform_message::{PlatformInboundMessage, PlatformOutboundMessage};
 
 pub struct PlatformConnector<R> {
     builder: ConnectorEnvelopeBuilder,
@@ -43,17 +44,33 @@ where
         attachments: Vec<Attachment>,
         metadata: serde_json::Value,
     ) -> anyhow::Result<()> {
+        self.handle_platform_inbound(PlatformInboundMessage {
+            event_id: event_id.into(),
+            session_key: session_key.into(),
+            message_id: message_id.into(),
+            sender_id: sender_id.into(),
+            text,
+            attachments,
+            metadata,
+        })
+        .await
+    }
+
+    pub async fn handle_platform_inbound(
+        &self,
+        msg: PlatformInboundMessage,
+    ) -> anyhow::Result<()> {
         deliver_inbound_to_runtime(
             self.runtime.as_ref(),
             self,
             ConnectorInboundInput {
-                event_id: event_id.into(),
-                session_key: session_key.into(),
-                message_id: message_id.into(),
-                sender_id: sender_id.into(),
-                text,
-                attachments,
-                metadata,
+                event_id: msg.event_id,
+                session_key: msg.session_key,
+                message_id: msg.message_id,
+                sender_id: msg.sender_id,
+                text: msg.text,
+                attachments: msg.attachments,
+                metadata: msg.metadata,
             },
         )
         .await
@@ -68,16 +85,31 @@ where
         attachments: Vec<Attachment>,
         metadata: serde_json::Value,
     ) -> anyhow::Result<()> {
+        self.handle_platform_outbound(PlatformOutboundMessage {
+            event_id: event_id.into(),
+            session_key: session_key.into(),
+            reply_to,
+            text,
+            attachments,
+            metadata,
+        })
+        .await
+    }
+
+    pub async fn handle_platform_outbound(
+        &self,
+        msg: PlatformOutboundMessage,
+    ) -> anyhow::Result<()> {
         deliver_outbound_to_runtime(
             self.runtime.as_ref(),
             self,
             ConnectorOutboundInput {
-                event_id: event_id.into(),
-                session_key: session_key.into(),
-                reply_to,
-                text,
-                attachments,
-                metadata,
+                event_id: msg.event_id,
+                session_key: msg.session_key,
+                reply_to: msg.reply_to,
+                text: msg.text,
+                attachments: msg.attachments,
+                metadata: msg.metadata,
             },
         )
         .await
@@ -221,5 +253,39 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(runtime.events.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn platform_connector_handles_platform_message_objects() {
+        let runtime = Arc::new(FakeRuntime {
+            events: Mutex::new(Vec::new()),
+        });
+        let connector = PlatformConnector::new("qqbot", runtime.clone())
+            .source_peer("peer-a")
+            .target_peer("peer-b");
+        connector
+            .handle_platform_inbound(PlatformInboundMessage {
+                event_id: "evt-5".into(),
+                session_key: "qqbot:c2c:obj".into(),
+                message_id: "msg-5".into(),
+                sender_id: "user-5".into(),
+                text: Some("object inbound".into()),
+                attachments: vec![],
+                metadata: serde_json::json!({}),
+            })
+            .await
+            .unwrap();
+        connector
+            .handle_platform_outbound(PlatformOutboundMessage {
+                event_id: "evt-6".into(),
+                session_key: "qqbot:c2c:obj".into(),
+                reply_to: Some("msg-6".into()),
+                text: Some("object outbound".into()),
+                attachments: vec![],
+                metadata: serde_json::json!({}),
+            })
+            .await
+            .unwrap();
+        assert_eq!(runtime.events.lock().unwrap().len(), 2);
     }
 }
