@@ -4,7 +4,8 @@ use nexlink_core::{
 use std::sync::{Arc, Mutex};
 
 use crate::connector_adapter::{
-    deliver_inbound_to_runtime, ConnectorAdapter, ConnectorInboundInput, ConnectorOutboundInput,
+    deliver_inbound_to_runtime, deliver_outbound_to_runtime, ConnectorAdapter,
+    ConnectorInboundInput, ConnectorOutboundInput,
 };
 use crate::connector_envelope::ConnectorEnvelopeBuilder;
 
@@ -127,6 +128,30 @@ where
     .await
 }
 
+pub async fn drive_telegram_like_outbound_to_runtime<R>(
+    runtime: Arc<R>,
+    source_peer: impl Into<String>,
+    target_peer: impl Into<String>,
+) -> anyhow::Result<()>
+where
+    R: Runtime + Send + Sync,
+{
+    let connector = TelegramLikeConnector::new(source_peer, target_peer);
+    deliver_outbound_to_runtime(
+        runtime.as_ref(),
+        &connector,
+        ConnectorOutboundInput {
+            event_id: "evt-tg-drive-1".into(),
+            session_key: "telegram:chat:drive".into(),
+            reply_to: Some("msg-tg-drive-1".into()),
+            text: Some("hello runtime outbound".into()),
+            attachments: vec![],
+            metadata: serde_json::json!({"surface": "telegram-drive"}),
+        },
+    )
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -199,6 +224,17 @@ mod tests {
             events: Mutex::new(Vec::new()),
         });
         drive_qq_like_inbound_to_runtime(runtime.clone(), "peer-a", "peer-b")
+            .await
+            .unwrap();
+        assert_eq!(runtime.events.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn drives_telegram_like_outbound_to_runtime() {
+        let runtime = Arc::new(FakeRuntime {
+            events: Mutex::new(Vec::new()),
+        });
+        drive_telegram_like_outbound_to_runtime(runtime.clone(), "peer-b", "peer-c")
             .await
             .unwrap();
         assert_eq!(runtime.events.lock().unwrap().len(), 1);
