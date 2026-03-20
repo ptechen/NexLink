@@ -10,6 +10,7 @@ use nexlink_lib::config::default_data_dir;
 use nexlink_lib::identity::NodeIdentity;
 use nexlink_lib::network::behaviour::RelayBehaviourEvent;
 use nexlink_lib::network::swarm::build_relay_swarm;
+use nexlink_lib::peer_model;
 use nexlink_lib::proxy::{
     credentials::derive_credentials, CREDENTIALS_PROTOCOL, CREDENTIALS_SYNC_PROTOCOL,
 };
@@ -193,9 +194,10 @@ async fn main() -> Result<()> {
                         info!(%peer_id, "Peer connected");
                     }
                     SwarmEvent::ConnectionClosed { peer_id, .. } => {
+                        let peer_model = peer_model::disconnected_peer(peer_id);
                         CONNECTED_PEERS.remove(&peer_id);
                         PROVIDER_PEERS.remove(&peer_id);
-                        info!(%peer_id, "Peer disconnected");
+                        info!(%peer_id, peer = ?peer_model, "Peer disconnected");
                     }
                     SwarmEvent::Behaviour(event) => {
                         match event {

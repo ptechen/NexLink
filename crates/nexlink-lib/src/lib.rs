@@ -5,6 +5,7 @@ pub mod network;
 pub mod network_id;
 pub mod node_score;
 pub mod pac;
+pub mod peer_model;
 pub mod proxy;
 pub mod sys_proxy;
 pub mod traffic;
