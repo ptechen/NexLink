@@ -12,6 +12,64 @@ pub struct ConnectorEnvelopeBuilder {
     pub channel: String,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nexlink_core::{EventPayload, EventType};
+
+    #[test]
+    fn builds_inbound_connector_event() {
+        let builder = ConnectorEnvelopeBuilder::new("qqbot")
+            .source_peer("peer-a")
+            .target_peer("peer-b");
+        let event = builder.inbound_connector(
+            "evt-1",
+            "qqbot:c2c:123",
+            "msg-1",
+            "user-1",
+            Some("hello".to_string()),
+            vec![],
+            serde_json::json!({"surface": "qqbot"}),
+        );
+
+        assert!(matches!(event.event_type, EventType::MessageInbound));
+        assert_eq!(event.channel.as_deref(), Some("qqbot"));
+        assert_eq!(event.session_key.as_deref(), Some("qqbot:c2c:123"));
+        match event.payload {
+            EventPayload::MessageInbound(payload) => {
+                assert_eq!(payload.message_id, "msg-1");
+                assert_eq!(payload.sender_id, "user-1");
+                assert_eq!(payload.text.as_deref(), Some("hello"));
+            }
+            other => panic!("unexpected payload: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn builds_outbound_connector_event() {
+        let builder = ConnectorEnvelopeBuilder::new("telegram").source_peer("peer-b");
+        let event = builder.outbound_connector(
+            "evt-2",
+            "telegram:chat:456",
+            Some("msg-2".to_string()),
+            Some("world".to_string()),
+            vec![],
+            serde_json::json!({"surface": "telegram"}),
+        );
+
+        assert!(matches!(event.event_type, EventType::MessageOutbound));
+        assert_eq!(event.channel.as_deref(), Some("telegram"));
+        assert_eq!(event.session_key.as_deref(), Some("telegram:chat:456"));
+        match event.payload {
+            EventPayload::MessageOutbound(payload) => {
+                assert_eq!(payload.reply_to.as_deref(), Some("msg-2"));
+                assert_eq!(payload.text.as_deref(), Some("world"));
+            }
+            other => panic!("unexpected payload: {other:?}"),
+        }
+    }
+}
+
 impl ConnectorEnvelopeBuilder {
     pub fn new(channel: impl Into<String>) -> Self {
         Self {
