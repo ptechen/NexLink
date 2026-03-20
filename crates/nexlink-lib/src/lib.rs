@@ -1,6 +1,7 @@
 pub mod cache;
 pub mod config;
 pub mod identity;
+pub mod message_model;
 pub mod network;
 pub mod network_id;
 pub mod node_score;
