@@ -1,7 +1,5 @@
-use nexlink_core::{
-    Attachment, EventEnvelope, InvokeRequest, InvokeResponse, InvokeStatus, Runtime,
-};
-use std::sync::{Arc, Mutex};
+use nexlink_core::{Attachment, EventEnvelope, Runtime};
+use std::sync::Arc;
 
 use crate::connector_adapter::{
     deliver_inbound_to_runtime, deliver_outbound_to_runtime, ConnectorAdapter,
@@ -155,7 +153,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nexlink_core::{EventPayload, EventType};
+    use nexlink_core::{EventPayload, EventType, InvokeRequest, InvokeResponse, InvokeStatus};
+    use std::sync::Mutex;
 
     #[tokio::test]
     async fn builds_qq_like_inbound_example() {
