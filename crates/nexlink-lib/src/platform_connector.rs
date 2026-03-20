@@ -1,4 +1,4 @@
-use nexlink_core::{Attachment, Runtime};
+use nexlink_core::{Attachment, Connector, MessageOutboundPayload, Runtime};
 use std::sync::Arc;
 
 use crate::connector_adapter::{
@@ -94,6 +94,36 @@ where
     }
 }
 
+#[async_trait::async_trait]
+impl<R> Connector for PlatformConnector<R>
+where
+    R: Runtime + Send + Sync,
+{
+    fn channel(&self) -> &str {
+        &self.builder.channel
+    }
+
+    async fn start(&self) -> anyhow::Result<()> {
+        Ok(())
+    }
+
+    async fn send_message(
+        &self,
+        session_key: &str,
+        payload: MessageOutboundPayload,
+    ) -> anyhow::Result<()> {
+        self.handle_outbound(
+            "evt-platform-send",
+            session_key.to_string(),
+            payload.reply_to,
+            payload.text,
+            payload.attachments,
+            payload.metadata,
+        )
+        .await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -163,6 +193,30 @@ mod tests {
                 Some("world".into()),
                 vec![],
                 serde_json::json!({"surface": "telegram"}),
+            )
+            .await
+            .unwrap();
+        assert_eq!(runtime.events.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn platform_connector_implements_connector_trait() {
+        let runtime = Arc::new(FakeRuntime {
+            events: Mutex::new(Vec::new()),
+        });
+        let connector = PlatformConnector::new("telegram", runtime.clone())
+            .source_peer("peer-b")
+            .target_peer("peer-c");
+        assert_eq!(connector.channel(), "telegram");
+        connector
+            .send_message(
+                "telegram:chat:test",
+                MessageOutboundPayload {
+                    reply_to: Some("msg-3".into()),
+                    text: Some("through trait".into()),
+                    attachments: vec![],
+                    metadata: serde_json::json!({"surface": "telegram"}),
+                },
             )
             .await
             .unwrap();

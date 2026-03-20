@@ -4,7 +4,7 @@ use crate::{MessageOutboundPayload, OutboundConnectorMessage, OutboundMessageCon
 
 #[async_trait]
 pub trait Connector: Send + Sync {
-    fn channel(&self) -> &'static str;
+    fn channel(&self) -> &str;
 
     async fn start(&self) -> anyhow::Result<()>;
 
