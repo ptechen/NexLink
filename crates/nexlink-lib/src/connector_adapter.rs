@@ -1,5 +1,8 @@
 use async_trait::async_trait;
-use nexlink_core::{Attachment, EventEnvelope};
+use nexlink_core::{
+    Attachment, EventEnvelope, InvokeRequest, InvokeResponse, InvokeStatus, Runtime,
+};
+use std::sync::Mutex;
 
 use crate::connector_envelope::ConnectorEnvelopeBuilder;
 
@@ -22,6 +25,32 @@ pub struct ConnectorOutboundInput {
     pub text: Option<String>,
     pub attachments: Vec<Attachment>,
     pub metadata: serde_json::Value,
+}
+
+pub async fn deliver_inbound_to_runtime<R, A>(
+    runtime: &R,
+    adapter: &A,
+    input: ConnectorInboundInput,
+) -> anyhow::Result<()>
+where
+    R: Runtime + Send + Sync,
+    A: ConnectorAdapter + Send + Sync,
+{
+    let event = adapter.map_inbound(input).await?;
+    runtime.handle_event(event).await
+}
+
+pub async fn deliver_outbound_to_runtime<R, A>(
+    runtime: &R,
+    adapter: &A,
+    input: ConnectorOutboundInput,
+) -> anyhow::Result<()>
+where
+    R: Runtime + Send + Sync,
+    A: ConnectorAdapter + Send + Sync,
+{
+    let event = adapter.map_outbound(input).await?;
+    runtime.handle_event(event).await
 }
 
 #[async_trait]
@@ -65,6 +94,27 @@ mod tests {
     impl ConnectorAdapter for FakeAdapter {
         fn envelope_builder(&self) -> &ConnectorEnvelopeBuilder {
             &self.builder
+        }
+    }
+
+    struct FakeRuntime {
+        events: Mutex<Vec<EventEnvelope>>,
+    }
+
+    #[async_trait]
+    impl Runtime for FakeRuntime {
+        async fn handle_event(&self, event: EventEnvelope) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push(event);
+            Ok(())
+        }
+
+        async fn invoke_capability(&self, request: InvokeRequest) -> anyhow::Result<InvokeResponse> {
+            Ok(InvokeResponse {
+                request_id: request.request_id,
+                status: InvokeStatus::Succeeded,
+                result: serde_json::json!({}),
+                error: None,
+            })
         }
     }
 
@@ -120,5 +170,33 @@ mod tests {
             }
             other => panic!("unexpected payload: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn delivers_inbound_to_runtime() {
+        let adapter = FakeAdapter {
+            builder: ConnectorEnvelopeBuilder::new("qqbot").source_peer("peer-a"),
+        };
+        let runtime = FakeRuntime {
+            events: Mutex::new(Vec::new()),
+        };
+
+        deliver_inbound_to_runtime(
+            &runtime,
+            &adapter,
+            ConnectorInboundInput {
+                event_id: "evt-3".into(),
+                session_key: "qqbot:c2c:2".into(),
+                message_id: "msg-2".into(),
+                sender_id: "user-2".into(),
+                text: Some("ping".into()),
+                attachments: vec![],
+                metadata: serde_json::json!({}),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(runtime.events.lock().unwrap().len(), 1);
     }
 }
