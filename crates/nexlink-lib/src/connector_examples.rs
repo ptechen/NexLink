@@ -1,4 +1,7 @@
-use nexlink_core::{Attachment, EventEnvelope};
+use nexlink_core::{
+    Attachment, EventEnvelope, InvokeRequest, InvokeResponse, InvokeStatus, Runtime,
+};
+use std::sync::{Arc, Mutex};
 
 use crate::connector_adapter::{ConnectorAdapter, ConnectorInboundInput, ConnectorOutboundInput};
 use crate::connector_envelope::ConnectorEnvelopeBuilder;
@@ -80,6 +83,23 @@ pub async fn telegram_like_outbound_example(
         .await
 }
 
+pub struct RuntimeBridge<R> {
+    runtime: Arc<R>,
+}
+
+impl<R> RuntimeBridge<R>
+where
+    R: Runtime,
+{
+    pub fn new(runtime: Arc<R>) -> Self {
+        Self { runtime }
+    }
+
+    pub async fn deliver(&self, event: EventEnvelope) -> anyhow::Result<()> {
+        self.runtime.handle_event(event).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -109,5 +129,40 @@ mod tests {
             }
             other => panic!("unexpected payload: {other:?}"),
         }
+    }
+
+    struct FakeRuntime {
+        events: Mutex<Vec<EventEnvelope>>,
+    }
+
+    #[async_trait::async_trait]
+    impl Runtime for FakeRuntime {
+        async fn handle_event(&self, event: EventEnvelope) -> anyhow::Result<()> {
+            self.events.lock().unwrap().push(event);
+            Ok(())
+        }
+
+        async fn invoke_capability(
+            &self,
+            request: InvokeRequest,
+        ) -> anyhow::Result<InvokeResponse> {
+            Ok(InvokeResponse {
+                request_id: request.request_id,
+                status: InvokeStatus::Succeeded,
+                result: serde_json::json!({}),
+                error: None,
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn runtime_bridge_delivers_event() {
+        let runtime = Arc::new(FakeRuntime {
+            events: Mutex::new(Vec::new()),
+        });
+        let bridge = RuntimeBridge::new(runtime.clone());
+        let event = qq_like_inbound_example("peer-a", "peer-b").await.unwrap();
+        bridge.deliver(event).await.unwrap();
+        assert_eq!(runtime.events.lock().unwrap().len(), 1);
     }
 }
