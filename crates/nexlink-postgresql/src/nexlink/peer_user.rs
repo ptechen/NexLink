@@ -135,21 +135,21 @@ impl PeerUser {
         }
     }
 
-    /// Upsert traffic counters into peer_user.
-    pub async fn upsert_traffic_counters(peer_id: &str, send: i64, recv: i64) -> Result<()> {
+    /// Add delta traffic counters into peer_user.
+    pub async fn add_traffic_delta(peer_id: &str, send_delta: i64, recv_delta: i64) -> Result<()> {
         let sql = r#"
             INSERT INTO peer_user (peer_id, send, recv)
             VALUES ($1, $2, $3)
             ON CONFLICT (peer_id) DO UPDATE
-            SET send = EXCLUDED.send,
-                recv = EXCLUDED.recv,
+            SET send = peer_user.send + EXCLUDED.send,
+                recv = peer_user.recv + EXCLUDED.recv,
                 updated_at = NOW()
         "#;
         let mut pool = POSTGRES_POOL.acquire().await?;
         sqlx::query(sql)
             .bind(peer_id)
-            .bind(send)
-            .bind(recv)
+            .bind(send_delta)
+            .bind(recv_delta)
             .execute(&mut *pool)
             .await?;
         Ok(())

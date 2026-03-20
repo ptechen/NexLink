@@ -1,59 +1,51 @@
 use anyhow::{Context, Result};
 use clap::Parser;
-use futures_util::TryStreamExt;
 use nexlink_postgresql::nexlink::peer_user::PeerUser;
 use nexlink_taos::{TaosClient, TaosConfig};
 use serde::Deserialize;
-use taos::{AsyncFetchable, AsyncQueryable};
-use tokio::time::{self, Duration};
-use tracing::{info, warn};
+use taos::{AsyncQueryable, AsyncTBuilder, TmqBuilder, AsAsyncConsumer, IsAsyncData};
+use taos::Timeout;
+use tracing::info;
 use tracing_subscriber::EnvFilter;
 
+const DEFAULT_TOPIC: &str = "nexlink_traffic_metrics";
+
 #[derive(Parser, Debug)]
-#[command(
-    name = "nexlink-traffic-sync",
-    about = "Sync aggregated traffic from TDengine to PostgreSQL"
-)]
+#[command(name = "nexlink-traffic-sync", about = "Consume TDengine TMQ traffic topic and update PostgreSQL")]
 struct Cli {
-    #[arg(long, default_value_t = 30)]
-    interval_secs: u64,
+    #[arg(long, default_value = DEFAULT_TOPIC)]
+    topic: String,
+
+    #[arg(long, default_value = "nexlink-traffic-sync")]
+    group_id: String,
 
     #[arg(long, default_value_t = false)]
-    once: bool,
+    init_topic: bool,
 }
 
 #[derive(Debug, Deserialize)]
-struct AggregatedTrafficRow {
+struct TrafficRow {
     peer_id: String,
-    send: i64,
-    recv: i64,
+    upload_bytes: i64,
+    download_bytes: i64,
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
     tracing_subscriber::fmt()
-        .with_env_filter(
-            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
-        )
+        .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
         .init();
 
     let cli = Cli::parse();
-    let repo = TrafficSyncService::new(TaosClient::new(TaosConfig::from_env()));
+    let taos_cfg = TaosConfig::from_env();
+    let service = TrafficSyncService::new(TaosClient::new(taos_cfg.clone()));
 
-    if cli.once {
-        let updated = repo.sync_once().await?;
-        info!(updated, "Traffic sync finished in one-shot mode");
-        return Ok(());
+    if cli.init_topic {
+        service.ensure_topic(&cli.topic).await?;
+        info!(topic = %cli.topic, "TMQ topic initialized");
     }
 
-    let mut interval = time::interval(Duration::from_secs(cli.interval_secs));
-    loop {
-        interval.tick().await;
-        match repo.sync_once().await {
-            Ok(updated) => info!(updated, "Traffic sync tick complete"),
-            Err(err) => warn!(error = %err, "Traffic sync tick failed"),
-        }
-    }
+    service.consume_loop(&cli.topic, &cli.group_id).await
 }
 
 struct TrafficSyncService {
@@ -65,43 +57,83 @@ impl TrafficSyncService {
         Self { taos }
     }
 
-    async fn sync_once(&self) -> Result<usize> {
-        let rows = self.fetch_aggregated_rows().await?;
-        let mut updated = 0usize;
-
-        for row in rows {
-            PeerUser::upsert_traffic_counters(&row.peer_id, row.send, row.recv)
-                .await
-                .with_context(|| format!("failed to upsert traffic for peer {}", row.peer_id))?;
-            updated += 1;
-        }
-
-        Ok(updated)
-    }
-
-    async fn fetch_aggregated_rows(&self) -> Result<Vec<AggregatedTrafficRow>> {
+    async fn ensure_topic(&self, topic: &str) -> Result<()> {
+        self.taos.ensure_traffic_schema().await?;
         let taos = self.taos.connect().await?;
         let cfg = self.taos.config();
-        taos.exec(format!("USE `{}`", cfg.database))
-            .await
-            .context("failed to switch taos database before traffic aggregation")?;
+        taos.exec(format!("USE `{}`", cfg.database)).await?;
+        taos.exec(format!("DROP TOPIC IF EXISTS `{}`", topic)).await?;
+        taos.exec(format!(
+            "CREATE TOPIC `{}` AS SELECT peer_id, upload_bytes, download_bytes FROM `{}`",
+            topic, cfg.stable
+        ))
+        .await
+        .with_context(|| format!("failed to create tmq topic {}", topic))?;
+        Ok(())
+    }
 
-        let sql = format!(
-            "SELECT peer_id, CAST(SUM(upload_bytes) AS BIGINT) AS send, CAST(SUM(download_bytes) AS BIGINT) AS recv FROM `{}` GROUP BY peer_id",
-            cfg.stable
-        );
+    async fn consume_loop(&self, topic: &str, group_id: &str) -> Result<()> {
+        let dsn = self.tmq_dsn(group_id)?;
+        let tmq = TmqBuilder::from_dsn(&dsn).context("failed to build tmq dsn")?;
+        let mut consumer = tmq.build().await.context("failed to create tmq consumer")?;
+        consumer.subscribe([topic]).await.context("failed to subscribe tmq topic")?;
+        info!(topic = %topic, group_id = %group_id, "TMQ consumer started");
 
-        let mut result = taos
-            .query(sql)
-            .await
-            .context("failed to query aggregated traffic from taos")?;
+        loop {
+            let maybe = consumer
+                .recv_timeout(Timeout::Never)
+                .await
+                .context("tmq recv failed")?;
+            let Some((offset, message)) = maybe else {
+                info!("TMQ recv returned no message, continue waiting");
+                continue;
+            };
 
-        let rows: Vec<AggregatedTrafficRow> = result
-            .deserialize()
-            .try_collect()
-            .await
-            .context("failed to deserialize aggregated taos rows")?;
+            if let Some(data) = message.into_data() {
+                loop {
+                    let maybe_block: Option<taos::RawBlock> = data.fetch_raw_block().await.context("failed to fetch tmq block")?;
+                    let Some(block) = maybe_block else { break; };
+                    let rows: Vec<TrafficRow> = block
+                        .deserialize()
+                        .collect::<std::result::Result<Vec<_>, _>>()
+                        .context("failed to deserialize tmq rows")?;
+                    let mut total_up = 0i64;
+                    let mut total_down = 0i64;
+                    let mut peer_id = String::new();
+                    for row in rows {
+                        if peer_id.is_empty() {
+                            peer_id = row.peer_id;
+                        }
+                        total_up += row.upload_bytes;
+                        total_down += row.download_bytes;
+                    }
+                    if !peer_id.is_empty() && (total_up != 0 || total_down != 0) {
+                        PeerUser::add_traffic_delta(&peer_id, total_up, total_down)
+                            .await
+                            .with_context(|| format!("failed to update postgres for peer {}", peer_id))?;
+                        info!(peer_id = %peer_id, send_delta = total_up, recv_delta = total_down, "Applied TMQ traffic delta to postgres");
+                    }
+                }
+            } else {
+                info!("Skipping non-data TMQ message");
+            }
+            consumer.commit(offset).await.context("failed to commit tmq offset")?;
+        }
+    }
 
-        Ok(rows)
+    fn tmq_dsn(&self, group_id: &str) -> Result<String> {
+        let cfg = self.taos.config();
+        let raw = cfg.dsn.trim();
+        let base = if let Some(rest) = raw.strip_prefix("taos+ws://") {
+            format!("taos://{}", rest)
+        } else if let Some(rest) = raw.strip_prefix("ws://") {
+            format!("taos://{}", rest)
+        } else if let Some(rest) = raw.strip_prefix("http://") {
+            format!("taos://{}", rest)
+        } else {
+            raw.to_string()
+        };
+        let sep = if base.contains('?') { '&' } else { '?' };
+        Ok(format!("{}{sep}group.id={}", base, group_id))
     }
 }

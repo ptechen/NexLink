@@ -6,3 +6,4 @@ pub static POSTGRES_POOL: std::sync::LazyLock<sqlx::postgres::PgPool> =
     });
 pub type Result<T> = std::result::Result<T, sqlx::Error>;
 pub mod peer_user;
+pub mod sync_checkpoint;
