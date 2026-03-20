@@ -1,5 +1,6 @@
 pub mod bot;
 pub mod capability;
+pub mod channel;
 pub mod event;
 pub mod invoke;
 pub mod message;
@@ -10,6 +11,7 @@ pub mod traits;
 
 pub use bot::*;
 pub use capability::*;
+pub use channel::*;
 pub use event::*;
 pub use invoke::*;
 pub use message::*;

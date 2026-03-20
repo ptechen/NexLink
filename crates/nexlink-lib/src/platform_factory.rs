@@ -1,4 +1,4 @@
-use nexlink_core::Runtime;
+use nexlink_core::{PlatformChannel, Runtime};
 use std::sync::Arc;
 
 use crate::platform_connector::PlatformConnector;
@@ -20,7 +20,7 @@ where
         source_peer: impl Into<String>,
         target_peer: impl Into<String>,
     ) -> PlatformConnector<R> {
-        PlatformConnector::new("qqbot", self.runtime.clone())
+        PlatformConnector::new(PlatformChannel::Qqbot.as_str(), self.runtime.clone())
             .source_peer(source_peer)
             .target_peer(target_peer)
     }
