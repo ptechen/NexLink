@@ -94,4 +94,31 @@ mod tests {
             other => panic!("unexpected payload: {other:?}"),
         }
     }
+
+    #[tokio::test]
+    async fn maps_outbound_input_to_event() {
+        let adapter = FakeAdapter {
+            builder: ConnectorEnvelopeBuilder::new("telegram").target_peer("peer-b"),
+        };
+        let event = adapter
+            .map_outbound(ConnectorOutboundInput {
+                event_id: "evt-2".into(),
+                session_key: "telegram:chat:1".into(),
+                reply_to: Some("msg-9".into()),
+                text: Some("world".into()),
+                attachments: vec![],
+                metadata: serde_json::json!({"surface": "telegram"}),
+            })
+            .await
+            .unwrap();
+
+        assert!(matches!(event.event_type, EventType::MessageOutbound));
+        match event.payload {
+            EventPayload::MessageOutbound(payload) => {
+                assert_eq!(payload.reply_to.as_deref(), Some("msg-9"));
+                assert_eq!(payload.text.as_deref(), Some("world"));
+            }
+            other => panic!("unexpected payload: {other:?}"),
+        }
+    }
 }
