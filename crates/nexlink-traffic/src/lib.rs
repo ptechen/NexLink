@@ -1,5 +1,5 @@
-use std::sync::{Arc, LazyLock};
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, LazyLock};
 
 use copy_bidirectional::copy_bidirectional::TrafficTrait;
 use dashmap::DashMap;
@@ -72,9 +72,7 @@ pub fn dec_active_connections(peer_id: PeerId) {
 }
 
 pub fn update_context(peer_id: PeerId, update: TrafficContextUpdate<'_>) {
-    let mut context = NEXLINK_TRAFFIC_CONTEXT
-        .entry(peer_id)
-        .or_default();
+    let mut context = NEXLINK_TRAFFIC_CONTEXT.entry(peer_id).or_default();
 
     if let Some(role) = update.role {
         context.role = Some(role.to_string());
@@ -104,7 +102,9 @@ pub fn snapshot_all() -> Vec<TrafficSnapshot> {
                 role: context.as_ref().and_then(|ctx| ctx.role.clone()),
                 source: context.as_ref().and_then(|ctx| ctx.source.clone()),
                 source_ip: context.as_ref().and_then(|ctx| ctx.source_ip.clone()),
-                source_transport: context.as_ref().and_then(|ctx| ctx.source_transport.clone()),
+                source_transport: context
+                    .as_ref()
+                    .and_then(|ctx| ctx.source_transport.clone()),
             }
         })
         .collect()

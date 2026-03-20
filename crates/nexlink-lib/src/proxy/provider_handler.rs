@@ -2,7 +2,10 @@ use anyhow::{Context, Result};
 use dashmap::DashMap;
 use libp2p::futures::AsyncBufReadExt;
 use libp2p::{PeerId, Stream};
-use nexlink_traffic::{dec_active_connections, inc_active_connections, update_context, ProviderTrafficCounter, TrafficContextUpdate};
+use nexlink_traffic::{
+    dec_active_connections, inc_active_connections, update_context, ProviderTrafficCounter,
+    TrafficContextUpdate,
+};
 use std::sync::Arc;
 use tokio::net::TcpStream;
 use tokio_util::compat::FuturesAsyncReadCompatExt;
@@ -113,8 +116,12 @@ pub async fn handle_proxy_stream(
     );
     inc_active_connections(peer_id);
     let counter = ProviderTrafficCounter { peer_id };
-    let relay_result = crate::traffic::relay_bidirectional_with_counter(&mut tcp_stream, &mut p2p_compat, &counter)
-        .await;
+    let relay_result = crate::traffic::relay_bidirectional_with_counter(
+        &mut tcp_stream,
+        &mut p2p_compat,
+        &counter,
+    )
+    .await;
 
     if let Err(e) = relay_result {
         warn!(%peer_id, "socket relay failed: {e}");

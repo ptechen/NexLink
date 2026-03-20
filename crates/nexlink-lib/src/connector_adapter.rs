@@ -84,7 +84,8 @@ pub trait ConnectorAdapter: Send + Sync {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nexlink_core::{EventPayload, EventType};
+    use nexlink_core::{EventPayload, EventType, InvokeRequest, InvokeResponse, InvokeStatus};
+    use std::sync::Mutex;
 
     struct FakeAdapter {
         builder: ConnectorEnvelopeBuilder,

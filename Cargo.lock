@@ -3881,10 +3881,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "nexlink-core"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "serde",
+ "serde_json",
+ "time",
+]
+
+[[package]]
 name = "nexlink-lib"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "copy-bidirectional",
  "dashmap 6.1.0",
  "dirs",
@@ -3893,11 +3905,13 @@ dependencies = [
  "hkdf",
  "libp2p",
  "libp2p-stream",
+ "nexlink-core",
  "nexlink-traffic",
  "serde",
  "serde_json",
  "sha2",
  "tempfile",
+ "time",
  "tokio",
  "tokio-util",
  "tracing",
@@ -3955,6 +3969,7 @@ dependencies = [
  "serde",
  "taos",
  "time",
+ "tracing",
 ]
 
 [[package]]
@@ -3964,6 +3979,24 @@ dependencies = [
  "copy-bidirectional",
  "dashmap 6.1.0",
  "libp2p",
+]
+
+[[package]]
+name = "nexlink-traffic-sync"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "futures-util",
+ "nexlink-core",
+ "nexlink-postgresql",
+ "nexlink-taos",
+ "serde",
+ "serde_json",
+ "taos",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
