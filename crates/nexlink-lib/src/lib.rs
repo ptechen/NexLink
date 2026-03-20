@@ -11,6 +11,7 @@ pub mod node_score;
 pub mod pac;
 pub mod peer_model;
 pub mod platform_connector;
+pub mod platform_factory;
 pub mod platform_message;
 pub mod proxy;
 pub mod sys_proxy;
