@@ -3,7 +3,9 @@ use nexlink_core::{
 };
 use std::sync::{Arc, Mutex};
 
-use crate::connector_adapter::{ConnectorAdapter, ConnectorInboundInput, ConnectorOutboundInput};
+use crate::connector_adapter::{
+    deliver_inbound_to_runtime, ConnectorAdapter, ConnectorInboundInput, ConnectorOutboundInput,
+};
 use crate::connector_envelope::ConnectorEnvelopeBuilder;
 
 pub struct QqLikeConnector {
@@ -100,6 +102,31 @@ where
     }
 }
 
+pub async fn drive_qq_like_inbound_to_runtime<R>(
+    runtime: Arc<R>,
+    source_peer: impl Into<String>,
+    target_peer: impl Into<String>,
+) -> anyhow::Result<()>
+where
+    R: Runtime + Send + Sync,
+{
+    let connector = QqLikeConnector::new(source_peer, target_peer);
+    deliver_inbound_to_runtime(
+        runtime.as_ref(),
+        &connector,
+        ConnectorInboundInput {
+            event_id: "evt-qq-drive-1".into(),
+            session_key: "qqbot:c2c:drive".into(),
+            message_id: "msg-qq-drive-1".into(),
+            sender_id: "user-qq-drive-1".into(),
+            text: Some("hello runtime".into()),
+            attachments: vec![],
+            metadata: serde_json::json!({"surface": "qqbot-drive"}),
+        },
+    )
+    .await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -163,6 +190,17 @@ mod tests {
         let bridge = RuntimeBridge::new(runtime.clone());
         let event = qq_like_inbound_example("peer-a", "peer-b").await.unwrap();
         bridge.deliver(event).await.unwrap();
+        assert_eq!(runtime.events.lock().unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn drives_qq_like_inbound_to_runtime() {
+        let runtime = Arc::new(FakeRuntime {
+            events: Mutex::new(Vec::new()),
+        });
+        drive_qq_like_inbound_to_runtime(runtime.clone(), "peer-a", "peer-b")
+            .await
+            .unwrap();
         assert_eq!(runtime.events.lock().unwrap().len(), 1);
     }
 }

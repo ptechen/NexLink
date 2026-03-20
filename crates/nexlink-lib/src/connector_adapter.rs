@@ -199,4 +199,31 @@ mod tests {
 
         assert_eq!(runtime.events.lock().unwrap().len(), 1);
     }
+
+    #[tokio::test]
+    async fn delivers_outbound_to_runtime() {
+        let adapter = FakeAdapter {
+            builder: ConnectorEnvelopeBuilder::new("telegram").target_peer("peer-b"),
+        };
+        let runtime = FakeRuntime {
+            events: Mutex::new(Vec::new()),
+        };
+
+        deliver_outbound_to_runtime(
+            &runtime,
+            &adapter,
+            ConnectorOutboundInput {
+                event_id: "evt-4".into(),
+                session_key: "telegram:chat:2".into(),
+                reply_to: Some("msg-4".into()),
+                text: Some("pong".into()),
+                attachments: vec![],
+                metadata: serde_json::json!({}),
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(runtime.events.lock().unwrap().len(), 1);
+    }
 }
