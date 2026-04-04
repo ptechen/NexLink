@@ -1,5 +1,5 @@
 [workspace]
-members = ['crates/*', "nexlink-app/src-tauri", "nexlink-relay", "nexlink-node", "nexlink-traffic-sync"]
+members = ['crates/*', "nexlink-app/src-tauri", "nexlink-relay", "nexlink-node", "nexlink-traffic-sync", "nexlink-proxy"]
 exclude = ["nexlink-app", "crates/nexlink-traffic-sync"]
 resolver = "2"
 

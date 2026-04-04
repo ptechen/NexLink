@@ -18,6 +18,16 @@ pub struct TrafficStats {
     pub upload_speed: u64,
     pub download_speed: u64,
     pub active_connections: u32,
+    #[serde(default)]
+    pub quota_available: bool,
+    #[serde(default)]
+    pub total_used: u64,
+    #[serde(default)]
+    pub total_limit: u64,
+    #[serde(default)]
+    pub remaining_bytes: u64,
+    #[serde(default)]
+    pub usage_ratio: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

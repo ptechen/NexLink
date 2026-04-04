@@ -11,7 +11,8 @@ use nexlink_lib::identity::NodeIdentity;
 use nexlink_lib::network::behaviour::RelayBehaviourEvent;
 use nexlink_lib::network::swarm::build_relay_swarm;
 use nexlink_lib::proxy::{
-    credentials::derive_credentials, CREDENTIALS_PROTOCOL, CREDENTIALS_SYNC_PROTOCOL,
+    credentials::derive_credentials, TrafficQuota, CREDENTIALS_PROTOCOL, CREDENTIALS_SYNC_PROTOCOL,
+    TRAFFIC_USAGE_PROTOCOL,
 };
 use nexlink_postgresql::nexlink::peer_user::PeerUser;
 use tokio::signal;
@@ -162,6 +163,43 @@ async fn main() -> Result<()> {
                 warn!(%requester, "Failed to close credentials sync stream: {e}");
             }
             info!(%requester, count = all_creds.len(), "Synced credentials to provider");
+        }
+    });
+
+    let mut traffic_control = swarm.behaviour().stream.new_control();
+    let mut traffic_incoming = traffic_control
+        .accept(TRAFFIC_USAGE_PROTOCOL)
+        .expect("traffic usage protocol not yet registered");
+
+    tokio::spawn(async move {
+        while let Some((peer_id, mut stream)) = traffic_incoming.next().await {
+            let usage = match PeerUser::select_optional_by_peer_id(&peer_id.to_string()).await {
+                Ok(Some(peer_user)) => Some(TrafficQuota {
+                    total_used: peer_user.send.max(0) as u64 + peer_user.recv.max(0) as u64,
+                    total_limit: peer_user.total_limit.max(0) as u64,
+                }),
+                Ok(None) => None,
+                Err(e) => {
+                    warn!(%peer_id, "Failed to load peer_user for traffic usage: {e}");
+                    continue;
+                }
+            };
+
+            let json = match serde_json::to_vec(&usage) {
+                Ok(value) => value,
+                Err(e) => {
+                    warn!(%peer_id, "Failed to serialize traffic usage: {e}");
+                    continue;
+                }
+            };
+
+            if let Err(e) = stream.write_all(&json).await {
+                warn!(%peer_id, "Failed to write traffic usage: {e}");
+                continue;
+            }
+            if let Err(e) = stream.close().await {
+                warn!(%peer_id, "Failed to close traffic usage stream: {e}");
+            }
         }
     });
 

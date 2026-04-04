@@ -6,7 +6,9 @@ use libp2p::{autonat, identify, ping, relay, rendezvous, Multiaddr, PeerId};
 use nexlink_lib::identity::NodeIdentity;
 use nexlink_lib::network::behaviour::NexlinkBehaviourEvent;
 use nexlink_lib::network::swarm::build_client_swarm;
-use nexlink_lib::proxy::{self, ProxyCredentials, CREDENTIALS_PROTOCOL};
+use nexlink_lib::proxy::{
+    self, ProxyCredentials, TrafficQuota, CREDENTIALS_PROTOCOL, TRAFFIC_USAGE_PROTOCOL,
+};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 use tokio::sync::{mpsc, oneshot, RwLock};
@@ -42,6 +44,56 @@ async fn refresh_proxy_credentials(
         state.proxy_password = Some(creds.password.clone());
     }
     Ok(creds)
+}
+
+async fn request_traffic_quota(
+    control: &mut libp2p_stream::Control,
+    relay_peer_id: PeerId,
+) -> Result<Option<TrafficQuota>> {
+    let mut stream = control
+        .open_stream(relay_peer_id, TRAFFIC_USAGE_PROTOCOL)
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to open traffic usage stream: {e}"))?;
+
+    let mut buf = Vec::new();
+    stream.read_to_end(&mut buf).await?;
+
+    let quota = serde_json::from_slice::<Option<TrafficQuota>>(&buf)?;
+    Ok(quota)
+}
+
+async fn refresh_traffic_quota(
+    shared: &Arc<RwLock<SharedState>>,
+    control: &mut libp2p_stream::Control,
+    relay_peer_id: PeerId,
+) -> Result<Option<TrafficQuota>> {
+    let quota = request_traffic_quota(control, relay_peer_id).await?;
+
+    if let Some(ref usage) = quota {
+        let mut state = shared.write().await;
+        state.traffic.quota_available = true;
+        state.traffic.total_used = usage.total_used;
+        state.traffic.total_limit = usage.total_limit;
+        state.traffic.remaining_bytes = usage.total_limit.saturating_sub(usage.total_used);
+        state.traffic.usage_ratio = if usage.total_limit > 0 {
+            (usage.total_used as f64 / usage.total_limit as f64).min(1.0)
+        } else {
+            0.0
+        };
+    } else {
+        clear_traffic_quota(shared).await;
+    }
+
+    Ok(quota)
+}
+
+async fn clear_traffic_quota(shared: &Arc<RwLock<SharedState>>) {
+    let mut state = shared.write().await;
+    state.traffic.quota_available = false;
+    state.traffic.total_used = 0;
+    state.traffic.total_limit = 0;
+    state.traffic.remaining_bytes = 0;
+    state.traffic.usage_ratio = 0.0;
 }
 
 fn send_command_result(done: oneshot::Sender<Result<(), String>>, result: Result<(), String>) {
@@ -161,6 +213,9 @@ pub async fn run_swarm_task(
     let mut rules_save_tick = interval(Duration::from_secs(60));
     rules_save_tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
     rules_save_tick.tick().await;
+    let mut traffic_quota_tick = interval(Duration::from_secs(10));
+    traffic_quota_tick.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    traffic_quota_tick.tick().await;
 
     info!(%peer_id, "Swarm task started");
     let _ = app.emit("swarm-ready", peer_id.to_string());
@@ -194,6 +249,14 @@ pub async fn run_swarm_task(
                                 Err(e) => {
                                     warn!("Failed to request credentials from relay: {e}");
                                 }
+                            }
+                        }
+
+                        if Some(remote) == relay_peer_id {
+                            let mut ctl = stream_control.clone();
+                            if let Err(e) = refresh_traffic_quota(&shared, &mut ctl, remote).await
+                            {
+                                warn!("Failed to request traffic quota from relay: {e}");
                             }
                         }
 
@@ -354,6 +417,7 @@ pub async fn run_swarm_task(
                             registered = false;
                             proxy_credentials = None;
                             relay_dial_in_flight = false;
+                            clear_traffic_quota(&shared).await;
                         } else {
                             node_selector.set_connected(remote, false);
                         }
@@ -365,6 +429,7 @@ pub async fn run_swarm_task(
                             registered = false;
                             proxy_credentials = None;
                             relay_dial_in_flight = false;
+                            clear_traffic_quota(&shared).await;
                         }
                         // Retry via relay circuit, but not if already a circuit failure (avoid loops)
                         if let (Some(ref r_addr), Some(r_peer)) = (&relay_addr, relay_peer_id) {
@@ -415,6 +480,17 @@ pub async fn run_swarm_task(
                             Err(e) => {
                                 warn!(%relay, addr = %addr, "Failed to retry relay connection: {e}");
                             }
+                        }
+                    }
+                }
+            }
+
+            _ = traffic_quota_tick.tick() => {
+                if let Some(relay) = relay_peer_id {
+                    if swarm.is_connected(&relay) {
+                        let mut ctl = stream_control.clone();
+                        if let Err(e) = refresh_traffic_quota(&shared, &mut ctl, relay).await {
+                            warn!("Failed to refresh traffic quota from relay: {e}");
                         }
                     }
                 }

@@ -1,0 +1,12 @@
+[package]
+name = "nexlink-proxy"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+hyper = { version = "1", features = ["server", "client", "http1"] }
+bytes = { version = "1" }
+http-body-util = { version = "0.1" }
+hyper-util = { version = "0.1", features = ["client-proxy"] }
+http = "1.4"
