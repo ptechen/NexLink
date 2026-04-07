@@ -1,9 +1,0 @@
-[package]
-name = "nexlink-postgresql"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
-sqlx = { workspace = true, features = ["json", "postgres", "_unstable-all-types", "runtime-tokio"] }
-serde = { workspace = true, features = ["derive"] }
-time = { workspace = true, features = ["serde"] }
